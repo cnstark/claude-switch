@@ -1,5 +1,49 @@
-# 编译产物
+# === 编译产物 ===
 bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+*.o
+*.a
 
-# 本地个人配置（含 AUTH_TOKEN，勿提交）
+# === Go 工具链 ===
+go.work
+go.work.sum
+
+# === IDE / 编辑器 ===
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# === OS 生成文件 ===
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# === 调试 / 性能分析 ===
+debug
+*.prof
+*.pprof
+cpu.prof
+mem.prof
+trace.out
+
+# === 依赖管理 ===
+vendor/
+
+# === 覆盖率 ===
+coverage.txt
+coverage.html
+coverage.out
+
+# === 本地个人配置（含 AUTH_TOKEN，勿提交）===
 .claude/settings.local.json
