@@ -35,11 +35,13 @@ type Forwarder interface {
 
 // Handler 代理 HTTP handler
 type Handler struct {
-	auth      AuthStore
-	resolver  ModelResolver
-	lookup    ConfigLookup
-	forwarder Forwarder
-	log       *logging.Logger
+	auth         AuthStore
+	resolver     ModelResolver
+	lookup       ConfigLookup
+	forwarder    Forwarder
+	log          *logging.Logger
+	tracker      usage.Recorder // nil = usage 关闭
+	usageEnabled bool           // 来自 per-request snapshot.Server.UsageStats
 }
 
 // NewHandler 创建代理 handler
@@ -119,6 +121,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// usage 收集器：仅当开关开启且 tracker 存在时创建（per-request）。
+	// 关闭时传 nil，Forward 走零开销直传路径。故障转移复用同一 collector：
+	// 连接失败的 cfg 不会 Attach（不计数），成功的 cfg 流结束时 Close 触发一次 Record。
+	var collector *usage.Collector
+	if h.usageEnabled && h.tracker != nil {
+		collector = usage.NewCollector(h.tracker, projectName, requestModel)
+	}
+
 	// 5. 依次尝试转发
 	for _, cfgName := range cfgNames {
 		cfg, ok := h.lookup.Upstream(cfgName)
@@ -141,7 +151,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		reqHeaders := r.Header.Clone()
 		rewriteHeaders(reqHeaders, cfg.APIKey)
 
-		fwdErr := h.forwarder.Forward(cfg, rewrittenBody, reqHeaders, w, nil)
+		fwdErr := h.forwarder.Forward(cfg, rewrittenBody, reqHeaders, w, collector)
 		if fwdErr == nil {
 			h.log.Info("request forwarded", map[string]any{
 				"project":  projectName,

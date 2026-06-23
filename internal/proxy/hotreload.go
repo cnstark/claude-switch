@@ -5,27 +5,32 @@ import (
 	"github.com/cnstark/claude-switch/internal/config"
 	"github.com/cnstark/claude-switch/internal/logging"
 	"github.com/cnstark/claude-switch/internal/project"
+	"github.com/cnstark/claude-switch/internal/usage"
 	"net/http"
 	"os"
 )
 
-// ReloadingHandler 每次请求从 watcher 获取最新配置快照的热重载 handler
+// ReloadingHandler 每次请求从 watcher 获取最新配置快照的热重载 handler。
+// tracker 不在 snapshot 里（计数器是累积状态，不随配置热重载），挂在 handler 上每请求透传。
 type ReloadingHandler struct {
 	authStore *auth.Store
 	forwarder Forwarder
 	watcher   *config.Watcher
+	tracker   usage.Recorder
 }
 
-// NewReloadingHandler 创建支持热重载的 handler
+// NewReloadingHandler 创建支持热重载的 handler。tracker 为进程级 usage 记录器。
 func NewReloadingHandler(
 	authStore *auth.Store,
 	forwarder Forwarder,
 	watcher *config.Watcher,
+	tracker usage.Recorder,
 ) *ReloadingHandler {
 	return &ReloadingHandler{
 		authStore: authStore,
 		forwarder: forwarder,
 		watcher:   watcher,
+		tracker:   tracker,
 	}
 }
 
@@ -68,11 +73,13 @@ func (h *ReloadingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Build handler with current snapshot dependencies
 	handler := &Handler{
-		auth:      h.authStore,
-		resolver:  resolver,
-		lookup:    lookup,
-		forwarder: h.forwarder,
-		log:       log,
+		auth:         h.authStore,
+		resolver:     resolver,
+		lookup:       lookup,
+		forwarder:    h.forwarder,
+		log:          log,
+		tracker:      h.tracker,
+		usageEnabled: snap.Server.UsageStats,
 	}
 
 	handler.ServeHTTP(w, r)
