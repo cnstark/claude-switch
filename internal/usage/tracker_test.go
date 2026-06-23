@@ -61,6 +61,59 @@ func TestTracker_ConcurrentRecord(t *testing.T) {
 	}
 }
 
+func TestTracker_ConcurrentRecordAndFlush(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage.json")
+	tr := NewTracker(path)
+	defer tr.Close()
+
+	const (
+		nRecorders = 20
+		nFlushers  = 4
+		nPerWorker = 50
+	)
+
+	var wg sync.WaitGroup
+
+	// Recorder goroutines: 并发 Record
+	for i := 0; i < nRecorders; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < nPerWorker; j++ {
+				tr.Record("p", "m", "2026-06-23", TokenUsage{Input: 1, Output: 2, CacheCreation: 3, CacheRead: 4})
+			}
+		}()
+	}
+
+	// Flusher goroutines: 与 Record 同时调用 Flush
+	for i := 0; i < nFlushers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < nPerWorker/5; j++ {
+				// Flush 错误可忽略 — 有些可能因竞争条件报错，dirty 会被恢复重试
+				tr.Flush()
+			}
+		}()
+	}
+
+	wg.Wait()
+	if err := tr.Flush(); err != nil {
+		t.Fatalf("final flush: %v", err)
+	}
+
+	f, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	got := f.Buckets["p"]["m"]["2026-06-23"]
+	expected := int64(nRecorders * nPerWorker)
+	if got.Input != expected || got.Output != expected*2 || got.CacheCreation != expected*3 || got.CacheRead != expected*4 {
+		t.Fatalf("concurrent Record+Flush mismatch: got %+v, expected Input=%d Output=%d CacheCreation=%d CacheRead=%d",
+			got, expected, expected*2, expected*3, expected*4)
+	}
+}
+
 func TestTracker_LoadPreservesExisting(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "usage.json")
 	tr1 := NewTracker(path)

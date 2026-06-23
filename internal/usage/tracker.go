@@ -134,6 +134,8 @@ func (t *Tracker) load() {
 		backup := t.path + ".bak." + time.Now().Format("20060102-150405")
 		if rerr := os.Rename(t.path, backup); rerr == nil {
 			fmt.Fprintf(os.Stderr, "[cs-proxy] usage 文件版本不兼容（%d），已备份到 %s，从空开始\n", f.Version, backup)
+		} else {
+			fmt.Fprintf(os.Stderr, "[cs-proxy] usage 文件版本不兼容（%d），备份失败: %v，从空开始\n", f.Version, rerr)
 		}
 		return
 	}
@@ -155,7 +157,10 @@ func (t *Tracker) atomicWrite(data []byte) error {
 		os.Remove(tmpPath)
 		return fmt.Errorf("写入临时文件失败: %w", err)
 	}
-	tmp.Close()
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("关闭临时文件失败: %w", err)
+	}
 	if err := os.Rename(tmpPath, t.path); err != nil {
 		os.Remove(tmpPath)
 		return fmt.Errorf("原子替换 usage 文件失败: %w", err)
