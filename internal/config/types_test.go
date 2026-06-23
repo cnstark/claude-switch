@@ -387,3 +387,48 @@ projects:
 		t.Fatal("expected non-nil snapshot")
 	}
 }
+
+func TestLoad_UsageStats(t *testing.T) {
+	// 显式 true
+	snap, err := Load([]byte(`
+server:
+  listen: 127.0.0.1:8787
+  usage_stats: true
+  private_keys:
+    sk-cs-key1: project1
+upstreams:
+  - name: cfg1
+    url: https://a.com
+    apikey: k1
+    model: m1
+    timeout: 60s
+projects:
+  - name: project1
+    model_map:
+      modelA: [cfg1]
+`))
+	if err != nil {
+		t.Fatalf("unexpected load error: %v", err)
+	}
+	if !snap.Server.UsageStats {
+		t.Fatal("expected usage_stats=true after load")
+	}
+
+	// 默认 false（缺省字段）
+	snap2, err := Load([]byte(`
+server:
+  listen: 127.0.0.1:8787
+  private_keys:
+    sk-cs-key1: project1
+upstreams:
+  - {name: cfg1, url: https://a.com, apikey: k1, model: m1, timeout: 60s}
+projects:
+  - {name: project1, model_map: {modelA: [cfg1]}}
+`))
+	if err != nil {
+		t.Fatalf("unexpected load error: %v", err)
+	}
+	if snap2.Server.UsageStats {
+		t.Fatal("expected usage_stats default false")
+	}
+}

@@ -5,6 +5,7 @@ import "time"
 // Server 代理服务器配置
 type Server struct {
 	Listen      string            `yaml:"listen"`
+	UsageStats  bool              `yaml:"usage_stats"`
 	PrivateKeys map[string]string `yaml:"private_keys"` // key → project name
 }
 
