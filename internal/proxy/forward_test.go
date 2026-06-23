@@ -1,11 +1,13 @@
 package proxy
 
 import (
+	"bytes"
+	"encoding/json"
 	"github.com/cnstark/claude-switch/internal/auth"
 	"github.com/cnstark/claude-switch/internal/config"
 	"github.com/cnstark/claude-switch/internal/logging"
 	"github.com/cnstark/claude-switch/internal/project"
-	"encoding/json"
+	"github.com/cnstark/claude-switch/internal/usage"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -272,5 +274,96 @@ func TestFailover_AllFail_502(t *testing.T) {
 	json.Unmarshal(rec.Body.Bytes(), &errResp)
 	if errResp["type"] != "error" {
 		t.Fatal("expected Anthropic error format for 502")
+	}
+}
+
+// usageFakeRecorder 供 proxy 包测试用：捕获 Record 调用。
+type usageFakeRecorder struct {
+	project string
+	model   string
+	date    string
+	u       usage.TokenUsage
+	calls   int
+}
+
+func (f *usageFakeRecorder) Record(project, model, date string, u usage.TokenUsage) {
+	f.project, f.model, f.date, f.u = project, model, date, u
+	f.calls++
+}
+
+func TestForward_UsageRecordedFromSSE(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		flusher := w.(http.Flusher)
+		w.Header().Set("content-type", "text/event-stream")
+		w.WriteHeader(200)
+		w.Write([]byte("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":12500,\"cache_creation_input_tokens\":800,\"cache_read_input_tokens\":0,\"output_tokens\":0}}}\n\n"))
+		flusher.Flush()
+		w.Write([]byte("event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{},\"usage\":{\"output_tokens\":3200}}\n\n"))
+		flusher.Flush()
+	}))
+	defer ts.Close()
+
+	cfg := config.Upstream{Name: "cfg1", URL: ts.URL, APIKey: "k", Model: "real", Timeout: 5 * time.Second}
+	rec := &usageFakeRecorder{}
+	c := usage.NewCollector(rec, "p1", "aliasModel")
+
+	fwd := NewStreamingForwarder()
+	w := httptest.NewRecorder()
+	err := fwd.Forward(cfg, []byte(`{}`), http.Header{"content-type": []string{"application/json"}}, w, c)
+	if err != nil {
+		t.Fatalf("forward error: %v", err)
+	}
+	if rec.calls != 1 {
+		t.Fatalf("expected 1 Record call, got %d", rec.calls)
+	}
+	if rec.u.Input != 12500 || rec.u.Output != 3200 || rec.u.CacheCreation != 800 || rec.u.CacheRead != 0 {
+		t.Fatalf("unexpected recorded usage: %+v", rec.u)
+	}
+	if rec.project != "p1" || rec.model != "aliasModel" {
+		t.Fatalf("unexpected project/model: %s/%s", rec.project, rec.model)
+	}
+}
+
+func TestForward_UsageStreamByteIdenticalToNoCollector(t *testing.T) {
+	// 关键不变量：旁路 scanner 不改变客户端收到的字节
+	sse := []byte("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n" +
+		"event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":5}}\n\n")
+
+	runOnce := func(c *usage.Collector) []byte {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			flusher := w.(http.Flusher)
+			w.Header().Set("content-type", "text/event-stream")
+			w.WriteHeader(200)
+			w.Write(sse)
+			flusher.Flush()
+		}))
+		defer ts.Close()
+		cfg := config.Upstream{Name: "cfg1", URL: ts.URL, APIKey: "k", Model: "m", Timeout: 5 * time.Second}
+		fwd := NewStreamingForwarder()
+		rec := httptest.NewRecorder()
+		_ = fwd.Forward(cfg, []byte(`{}`), http.Header{}, rec, c)
+		return rec.Body.Bytes()
+	}
+
+	without := runOnce(nil)
+	rec := &usageFakeRecorder{}
+	with := runOnce(usage.NewCollector(rec, "p1", "m"))
+	if !bytes.Equal(without, with) {
+		t.Fatalf("collector changed client stream:\nwithout=%s\nwith=%s", without, with)
+	}
+	if rec.calls != 1 {
+		t.Fatalf("expected usage recorded with collector, got %d calls", rec.calls)
+	}
+}
+
+func TestForward_ConnectionFailure_NoCommit(t *testing.T) {
+	cfg := config.Upstream{Name: "cfg1", URL: "http://127.0.0.1:19997", APIKey: "k", Model: "m", Timeout: 50 * time.Millisecond}
+	rec := &usageFakeRecorder{}
+	c := usage.NewCollector(rec, "p1", "m")
+	fwd := NewStreamingForwarder()
+	w := httptest.NewRecorder()
+	_ = fwd.Forward(cfg, []byte(`{}`), http.Header{}, w, c)
+	if rec.calls != 0 {
+		t.Fatalf("expected no commit on connection failure, got %d", rec.calls)
 	}
 }

@@ -2,8 +2,9 @@ package upstream
 
 import (
 	"bytes"
-	"github.com/cnstark/claude-switch/internal/config"
 	"fmt"
+	"github.com/cnstark/claude-switch/internal/config"
+	"github.com/cnstark/claude-switch/internal/usage"
 	"io"
 	"net"
 	"net/http"
@@ -26,8 +27,8 @@ func NewClient() *Client {
 	}
 }
 
-// Forward 向上游转发请求，返回响应
-func (c *Client) Forward(cfg config.Upstream, body []byte, headers http.Header, w http.ResponseWriter) error {
+// Forward 向上游转发请求，返回响应（legacy 非流式实现，usage 不接入）。
+func (c *Client) Forward(cfg config.Upstream, body []byte, headers http.Header, w http.ResponseWriter, _ *usage.Collector) error {
 	req, err := http.NewRequest("POST", cfg.URL+"/v1/messages", bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("创建上游请求失败: %w", err)

@@ -2,8 +2,9 @@ package proxy
 
 import (
 	"bytes"
-	"github.com/cnstark/claude-switch/internal/config"
 	"fmt"
+	"github.com/cnstark/claude-switch/internal/config"
+	"github.com/cnstark/claude-switch/internal/usage"
 	"io"
 	"net/http"
 )
@@ -30,8 +31,13 @@ func (e *ResponseStartedError) Error() string {
 
 func (e *ResponseStartedError) Unwrap() error { return e.Err }
 
-// Forward 发起上游请求并流式透传响应
-func (f *StreamingForwarder) Forward(cfg config.Upstream, body []byte, headers http.Header, w http.ResponseWriter) error {
+// Forward 发起上游请求并流式透传响应。
+// c 非 nil 时把响应流旁路 Tee 给 usage 收集器；c 为 nil 时零开销直传。
+// 不变量：响应已开始后（WriteHeader/首字节后）的失败包装为 ResponseStartedError，
+// handler 据此不转移；连接阶段失败返回普通 error，handler 转移到下一个 cfg。
+// usage 语义：连接阶段失败（client.Do err）时 collector 未 Attach、不 Close → 不计数；
+// 成功流结束时 Close 触发一次 Record（仅当扫到 usage）。
+func (f *StreamingForwarder) Forward(cfg config.Upstream, body []byte, headers http.Header, w http.ResponseWriter, c *usage.Collector) error {
 	req, err := http.NewRequest("POST", cfg.URL+"/v1/messages", bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("创建上游请求失败: %w", err)
@@ -46,10 +52,17 @@ func (f *StreamingForwarder) Forward(cfg config.Upstream, body []byte, headers h
 	client := &http.Client{Timeout: cfg.Timeout}
 	resp, err := client.Do(req)
 	if err != nil {
-		// 连接阶段失败：响应尚未开始，可安全转移到下一个上游
+		// 连接阶段失败：响应尚未开始，可安全转移。collector 未 Attach，不计数。
 		return fmt.Errorf("上游连接失败: %w", err)
 	}
 	defer resp.Body.Close()
+
+	// collector 按响应 content-type 选解析模式。注册在连接成功之后：
+	// 连接失败路径不会走到这里，Close 不会被调用 → 不计数。
+	if c != nil {
+		c.Attach(resp.Header.Get("content-type"))
+		defer c.Close() // 流结束（含中途 EOF）触发 Record；已见部分照常 commit
+	}
 
 	// 透传响应头
 	for k, vs := range resp.Header {
@@ -74,13 +87,15 @@ func (f *StreamingForwarder) Forward(cfg config.Upstream, body []byte, headers h
 			if canFlush {
 				flusher.Flush()
 			}
+			// 旁路喂给 usage 收集器（在写给客户端之后，不增加客户端延迟）
+			if c != nil {
+				c.Feed(buf[:n])
+			}
 		}
 		if readErr == io.EOF {
 			break
 		}
 		if readErr != nil {
-			// 响应已开始（如读 body 阶段 context deadline exceeded），
-			// 不可转移 —— 包装为 ResponseStartedError 通知 handler 停止重试
 			return &ResponseStartedError{Err: fmt.Errorf("读取上游响应失败: %w", readErr)}
 		}
 	}

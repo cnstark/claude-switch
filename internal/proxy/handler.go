@@ -1,12 +1,13 @@
 package proxy
 
 import (
-	"github.com/cnstark/claude-switch/internal/config"
-	"github.com/cnstark/claude-switch/internal/logging"
 	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/cnstark/claude-switch/internal/config"
+	"github.com/cnstark/claude-switch/internal/logging"
+	"github.com/cnstark/claude-switch/internal/usage"
 	"io"
 	"net/http"
 	"strings"
@@ -29,7 +30,7 @@ type ConfigLookup interface {
 
 // Forwarder 上游转发接口
 type Forwarder interface {
-	Forward(cfg config.Upstream, body []byte, headers http.Header, w http.ResponseWriter) error
+	Forward(cfg config.Upstream, body []byte, headers http.Header, w http.ResponseWriter, c *usage.Collector) error
 }
 
 // Handler 代理 HTTP handler
@@ -92,10 +93,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var reqBody map[string]any
 	if err := json.Unmarshal(body, &reqBody); err != nil {
 		h.log.Debug("request body json parse failed", map[string]any{
-			"error":      err.Error(),
-			"body_head":  truncStr(string(body), 512),
-			"body_len":   len(body),
-			"body_tail":  truncTail(string(body), 128),
+			"error":     err.Error(),
+			"body_head": truncStr(string(body), 512),
+			"body_len":  len(body),
+			"body_tail": truncTail(string(body), 128),
 		})
 		writeError(w, http.StatusBadRequest, "invalid_request_error", "请求体 JSON 解析失败")
 		return
@@ -131,16 +132,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.log.Debug("forwarding to upstream", map[string]any{
-			"upstream":          cfgName,
-			"upstream_url":      cfg.URL,
-			"rewritten_body_len": len(rewrittenBody),
+			"upstream":            cfgName,
+			"upstream_url":        cfg.URL,
+			"rewritten_body_len":  len(rewrittenBody),
 			"rewritten_body_head": truncStr(string(rewrittenBody), 512),
 			"rewritten_body_tail": truncTail(string(rewrittenBody), 128),
 		})
 		reqHeaders := r.Header.Clone()
 		rewriteHeaders(reqHeaders, cfg.APIKey)
 
-		fwdErr := h.forwarder.Forward(cfg, rewrittenBody, reqHeaders, w)
+		fwdErr := h.forwarder.Forward(cfg, rewrittenBody, reqHeaders, w, nil)
 		if fwdErr == nil {
 			h.log.Info("request forwarded", map[string]any{
 				"project":  projectName,
