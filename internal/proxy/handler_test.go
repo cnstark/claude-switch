@@ -318,7 +318,10 @@ projects:
 	tracker := usage.NewTracker(usagePath)
 	defer tracker.Close()
 
-	snap, _ := watcher.Current()
+	snap, err := watcher.Current()
+	if err != nil {
+		t.Fatalf("watcher current: %v", err)
+	}
 	authStore := auth.NewStore(snap.Server.PrivateKeys)
 	fwd := NewStreamingForwarder()
 	handler := NewReloadingHandler(authStore, fwd, watcher, tracker)
@@ -339,5 +342,25 @@ projects:
 	}
 	if !strings.Contains(out, "125") || !strings.Contains(out, "25") {
 		t.Fatalf("expected persisted usage in stats output, got: %s", out)
+	}
+}
+
+func TestHandler_MissingModelField_400(t *testing.T) {
+	h := setupTestHandler(
+		map[string]string{"sk-cs-key1": "p1"},
+		map[string]map[string][]string{"p1": {"m": {"cfg1"}}},
+		map[string]config.Upstream{
+			"cfg1": {Name: "cfg1", URL: "http://example.com", APIKey: "k", Model: "real-m", Timeout: 0},
+		},
+	)
+
+	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"max_tokens":100}`))
+	req.Header.Set("x-api-key", "sk-cs-key1")
+	req.Header.Set("content-type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+	if rec.Code != 400 {
+		t.Fatalf("expected 400 for missing model field, got %d", rec.Code)
 	}
 }
