@@ -3,7 +3,9 @@ package proxy
 import (
 	"github.com/cnstark/claude-switch/internal/config"
 	"github.com/cnstark/claude-switch/internal/logging"
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -80,10 +82,21 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request_error", "无法读取请求体")
 		return
 	}
+	h.log.Debug("request body received", map[string]any{
+		"body_len":      len(body),
+		"content_type":  r.Header.Get("content-type"),
+		"raw_body_head": truncStr(string(body), 512),
+	})
 
 	// 3. 解析 model
 	var reqBody map[string]any
 	if err := json.Unmarshal(body, &reqBody); err != nil {
+		h.log.Debug("request body json parse failed", map[string]any{
+			"error":      err.Error(),
+			"body_head":  truncStr(string(body), 512),
+			"body_len":   len(body),
+			"body_tail":  truncTail(string(body), 128),
+		})
 		writeError(w, http.StatusBadRequest, "invalid_request_error", "请求体 JSON 解析失败")
 		return
 	}
@@ -117,6 +130,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "internal_error", "请求重写失败")
 			return
 		}
+		h.log.Debug("forwarding to upstream", map[string]any{
+			"upstream":          cfgName,
+			"upstream_url":      cfg.URL,
+			"rewritten_body_len": len(rewrittenBody),
+			"rewritten_body_head": truncStr(string(rewrittenBody), 512),
+			"rewritten_body_tail": truncTail(string(rewrittenBody), 128),
+		})
 		reqHeaders := r.Header.Clone()
 		rewriteHeaders(reqHeaders, cfg.APIKey)
 
@@ -126,6 +146,17 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				"project":  projectName,
 				"model":    requestModel,
 				"upstream": cfgName,
+			})
+			return
+		}
+		// 不变量：响应已开始后（已 WriteHeader / 写了首字节）不得转移到下一个上游，
+		// 否则两段响应拼接会让客户端收到截断/混乱的 JSON（unexpected end of JSON input）。
+		// 此时也无法再向客户端写错误响应，只能记日志后终止。
+		var startedErr *ResponseStartedError
+		if errors.As(fwdErr, &startedErr) {
+			h.log.Info("upstream failed after response started, aborting failover", map[string]any{
+				"upstream": cfgName,
+				"error":    startedErr.Err.Error(),
 			})
 			return
 		}
@@ -143,18 +174,29 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusBadGateway, "upstream_error", "所有上游均不可用")
 }
 
-// rewriteRequestBody 替换 JSON 请求体中的 model 字段
+// rewriteRequestBody 替换 JSON 请求体中的 model 字段。
+// 使用 json.Encoder + SetEscapeHTML(false)，避免把请求体里的 <、>、& 等
+// HTML 特殊字符转义成 < 等——这些字符在 Claude Code 的 system-reminder
+// 和工具描述里很常见，转义虽 JSON 语义等价，但会改变字节内容并可能触发某些
+// 上游解析器的边界问题，原样保留更安全。
 func rewriteRequestBody(body []byte, targetModel string) ([]byte, error) {
 	var m map[string]any
 	if err := json.Unmarshal(body, &m); err != nil {
 		return nil, fmt.Errorf("rewrite: json 解析失败: %w", err)
 	}
 	m["model"] = targetModel
-	newBody, err := json.Marshal(m)
-	if err != nil {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(m); err != nil {
 		return nil, fmt.Errorf("rewrite: json 序列化失败: %w", err)
 	}
-	return newBody, nil
+	// json.Encoder.Encode 会追加一个换行符，去掉以保持与原 body 一致
+	out := buf.Bytes()
+	if n := len(out); n > 0 && out[n-1] == '\n' {
+		out = out[:n-1]
+	}
+	return out, nil
 }
 
 // rewriteHeaders 删除原 x-api-key，写入上游 key
@@ -183,4 +225,20 @@ func maskKeyLog(key string) string {
 		return "..."
 	}
 	return key[:8] + "..." + key[len(key)-4:]
+}
+
+// truncStr 截取字符串前 n 个字符用于日志，避免落盘过大
+func truncStr(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "...(truncated)"
+}
+
+// truncTail 截取字符串末尾 n 个字符，便于观察 JSON 是否被截断
+func truncTail(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return "...(truncated)..." + s[len(s)-n:]
 }
