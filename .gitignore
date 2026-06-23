@@ -1,0 +1,5 @@
+# 编译产物
+bin/
+
+# 本地个人配置（含 AUTH_TOKEN，勿提交）
+.claude/settings.local.json
