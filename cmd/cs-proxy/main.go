@@ -11,7 +11,16 @@ import (
 	"time"
 )
 
+// version 在构建时通过 -ldflags 注入，默认值为 "dev"
+var version = "dev"
+
 func main() {
+	// --version 直接输出版本号并退出
+	if len(os.Args) == 2 && os.Args[1] == "--version" {
+		fmt.Println("cs-proxy version", version)
+		os.Exit(0)
+	}
+
 	configPath := os.Getenv("CS_CONFIG")
 	if configPath == "" {
 		home, err := os.UserHomeDir()

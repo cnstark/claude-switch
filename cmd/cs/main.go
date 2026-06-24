@@ -21,6 +21,9 @@ import (
 
 var configPath string
 
+// version 在构建时通过 -ldflags 注入，默认值为 "dev"
+var version = "dev"
+
 func main() {
 	home, _ := os.UserHomeDir()
 	defaultConfig := home + "/.claude_switch/config.yaml"
@@ -31,6 +34,15 @@ func main() {
 		Long:  "管理 claude-switch 本地反向代理的配置：upstream、project、model mapping。",
 	}
 	rootCmd.PersistentFlags().StringVar(&configPath, "config", defaultConfig, "配置文件路径")
+
+	// === version ===
+	rootCmd.AddCommand(&cobra.Command{
+		Use:   "version",
+		Short: "打印版本号",
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Println("cs version", version)
+		},
+	})
 
 	// === key ===
 	keyCmd := &cobra.Command{Use: "key", Short: "私有 key 管理"}
