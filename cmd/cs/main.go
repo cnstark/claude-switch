@@ -1,12 +1,13 @@
 package main
 
 import (
-	"github.com/cnstark/claude-switch/internal/config"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/cnstark/claude-switch/internal/config"
+	"github.com/cnstark/claude-switch/internal/usage"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -536,6 +537,32 @@ func main() {
 
 	proxyCmd.AddCommand(proxyStartCmd, proxyStopCmd, proxyStatusCmd, proxyLogsCmd)
 	rootCmd.AddCommand(proxyCmd)
+
+	// === stats ===
+	statsCmd := &cobra.Command{
+		Use:   "stats [project]",
+		Short: "查看 token 用量统计",
+		Long:  "读取 ~/.claude_switch/usage.json，按 project/model/date 汇总 token 用量（input/output/cache_creation/cache_read）。",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			project := ""
+			if len(args) > 0 {
+				project = args[0]
+			}
+			since, _ := cmd.Flags().GetString("since")
+			model, _ := cmd.Flags().GetString("model")
+			usagePath := filepath.Join(filepath.Dir(configPath), "usage.json")
+			out, err := usage.RunStats(usagePath, project, since, model)
+			if err != nil {
+				return err
+			}
+			fmt.Print(out)
+			return nil
+		},
+	}
+	statsCmd.Flags().String("since", "7d", "时间区间：1d/7d/30d 或 YYYY-MM-DD")
+	statsCmd.Flags().String("model", "", "按模型过滤")
+	rootCmd.AddCommand(statsCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
