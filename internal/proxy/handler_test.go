@@ -212,6 +212,10 @@ func TestHandler_Failover_CountsOnce(t *testing.T) {
 	if rec.u.Input != 42 || rec.u.Output != 7 {
 		t.Fatalf("unexpected usage: %+v", rec.u)
 	}
+	// 故障转移后 model 应为上游真实模型名（cfg2.Model="m2"），而非 model_map 的 key（"m"）
+	if rec.model != "m2" {
+		t.Fatalf("expected model recorded as upstream real model 'm2', got %q", rec.model)
+	}
 }
 
 func TestHandler_UsageDisabled_NoCollector(t *testing.T) {
@@ -342,6 +346,10 @@ projects:
 	}
 	if !strings.Contains(out, "125") || !strings.Contains(out, "25") {
 		t.Fatalf("expected persisted usage in stats output, got: %s", out)
+	}
+	// 统计 key 应为上游真实模型名 "real"，而非 model_map 的 key "m"
+	if !strings.Contains(out, "real") {
+		t.Fatalf("expected stats to use upstream real model 'real', got: %s", out)
 	}
 }
 

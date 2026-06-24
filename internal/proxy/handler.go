@@ -135,6 +135,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			continue
 		}
+		// 故障转移时更新 usage collector 的 model 为上游真实模型名
+		if collector != nil {
+			collector.SetModel(cfg.Model)
+		}
 		rewrittenBody, err := rewriteRequestBody(body, cfg.Model)
 		if err != nil {
 			h.log.Info("rewrite failed", map[string]any{"error": err.Error()})

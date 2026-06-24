@@ -171,11 +171,17 @@ func (t *Tracker) atomicWrite(data []byte) error {
 // Collector 把 Recorder + project + model 绑成 per-request 句柄。
 // forward.go 在响应到达后 Attach（按 content-type 选解析模式），
 // 逐 chunk Feed，流结束 Close 触发一次 Record（仅当扫到 usage）。
+// model 在故障转移循环中可通过 SetModel 更新为上游真实模型名。
 type Collector struct {
 	rec     Recorder
 	project string
 	model   string
 	scanner *Scanner // Attach 后创建
+}
+
+// SetModel 更新统计用的模型名（用于故障转移时设为上游真实模型名）。
+func (c *Collector) SetModel(model string) {
+	c.model = model
 }
 
 // NewCollector 创建 per-request 收集器。rec 通常为 *Tracker，测试可传假实现。
