@@ -63,13 +63,14 @@ func (f *StreamingForwarder) Forward(cfg config.Upstream, body []byte, headers h
 		log.Debug("upstream response received", map[string]any{
 			"status_code":  resp.StatusCode,
 			"status":       resp.Status,
-			"content_type": resp.Header.Get("content-type"),
+			"content-type": resp.Header.Get("content-type"),
 			"content_len":  resp.Header.Get("content-length"),
 		})
 	}
 
-	// 非 2xx 响应：缓冲完整响应体以便记录错误详情，然后非流式写出。
-	// 错误响应体通常很小（几 KB），不会造成内存压力。
+	// 非 2xx 响应：判断是否可重试
+	// 可重试（5xx、429）：返回错误，让 handler 故障转移到下一个上游
+	// 不可重试（其他 4xx）：透传错误响应给客户端
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		errBody, readErr := io.ReadAll(resp.Body)
 		if readErr != nil {
@@ -87,6 +88,13 @@ func (f *StreamingForwarder) Forward(cfg config.Upstream, body []byte, headers h
 				"body_tail": truncTail(string(errBody), 256),
 			})
 		}
+
+		// 可重试：5xx 或 429，不向客户端写任何响应，直接返回错误让 handler 转移
+		if resp.StatusCode >= 500 || resp.StatusCode == 429 {
+			return fmt.Errorf("上游返回可重试错误: status=%d", resp.StatusCode)
+		}
+
+		// 不可重试：其他 4xx，直接透传响应
 		// 透传响应头
 		for k, vs := range resp.Header {
 			for _, v := range vs {

@@ -367,3 +367,128 @@ func TestForward_ConnectionFailure_NoCommit(t *testing.T) {
 		t.Fatalf("expected no commit on connection failure, got %d", rec.calls)
 	}
 }
+
+// TestFailover_FirstReturns5xx_FallbackSucceeds 验证第一个上游返回 5xx 时故障转移到第二个
+func TestFailover_FirstReturns5xx_FallbackSucceeds(t *testing.T) {
+	ts2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		w.WriteHeader(200)
+		w.Write([]byte(`{"status":"ok from backup"}`))
+	}))
+	defer ts2.Close()
+
+	ts1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		w.WriteHeader(503)
+		w.Write([]byte(`{"type":"error","error":{"type":"overloaded","message":"service unavailable"}}`))
+	}))
+	defer ts1.Close()
+
+	cfg1 := config.Upstream{Name: "cfg1", URL: ts1.URL, APIKey: "k1", Model: "m1", Timeout: 5 * time.Second}
+	cfg2 := config.Upstream{Name: "cfg2", URL: ts2.URL, APIKey: "k2", Model: "m2", Timeout: 5 * time.Second}
+
+	authStore := auth.NewStore(map[string]string{"sk-cs-key1": "p1"})
+	resolver := project.NewResolver(map[string]map[string][]string{"p1": {"m": {"cfg1", "cfg2"}}})
+	lookup := &configLookup{upstreams: map[string]config.Upstream{"cfg1": cfg1, "cfg2": cfg2}}
+	fwd := NewStreamingForwarder()
+	log := logging.New(logging.Off, io.Discard)
+	h := NewHandler(authStore, resolver, lookup, fwd, log)
+
+	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"m"}`))
+	req.Header.Set("x-api-key", "sk-cs-key1")
+	req.Header.Set("content-type", "application/json")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != 200 {
+		t.Fatalf("expected fallback to cfg2 succeed with 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "ok from backup") {
+		t.Fatal("expected response from backup upstream after 5xx failover")
+	}
+}
+
+// TestFailover_FirstReturns429_FallbackSucceeds 验证第一个上游返回 429 时故障转移到第二个
+func TestFailover_FirstReturns429_FallbackSucceeds(t *testing.T) {
+	ts2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		w.WriteHeader(200)
+		w.Write([]byte(`{"status":"ok from backup"}`))
+	}))
+	defer ts2.Close()
+
+	ts1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		w.WriteHeader(429)
+		w.Write([]byte(`{"type":"error","error":{"type":"rate_limit","message":"too many requests"}}`))
+	}))
+	defer ts1.Close()
+
+	cfg1 := config.Upstream{Name: "cfg1", URL: ts1.URL, APIKey: "k1", Model: "m1", Timeout: 5 * time.Second}
+	cfg2 := config.Upstream{Name: "cfg2", URL: ts2.URL, APIKey: "k2", Model: "m2", Timeout: 5 * time.Second}
+
+	authStore := auth.NewStore(map[string]string{"sk-cs-key1": "p1"})
+	resolver := project.NewResolver(map[string]map[string][]string{"p1": {"m": {"cfg1", "cfg2"}}})
+	lookup := &configLookup{upstreams: map[string]config.Upstream{"cfg1": cfg1, "cfg2": cfg2}}
+	fwd := NewStreamingForwarder()
+	log := logging.New(logging.Off, io.Discard)
+	h := NewHandler(authStore, resolver, lookup, fwd, log)
+
+	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"m"}`))
+	req.Header.Set("x-api-key", "sk-cs-key1")
+	req.Header.Set("content-type", "application/json")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != 200 {
+		t.Fatalf("expected fallback to cfg2 succeed with 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "ok from backup") {
+		t.Fatal("expected response from backup upstream after 429 failover")
+	}
+}
+
+// TestFailover_FirstReturns401_NoFailover 验证第一个上游返回 401（不可重试）时不进行故障转移
+func TestFailover_FirstReturns401_NoFailover(t *testing.T) {
+	secondCalled := false
+	ts2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secondCalled = true
+		w.Header().Set("content-type", "application/json")
+		w.WriteHeader(200)
+		w.Write([]byte(`{"status":"should not reach here"}`))
+	}))
+	defer ts2.Close()
+
+	ts1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		w.WriteHeader(401)
+		w.Write([]byte(`{"type":"error","error":{"type":"authentication_error","message":"invalid api key"}}`))
+	}))
+	defer ts1.Close()
+
+	cfg1 := config.Upstream{Name: "cfg1", URL: ts1.URL, APIKey: "k1", Model: "m1", Timeout: 5 * time.Second}
+	cfg2 := config.Upstream{Name: "cfg2", URL: ts2.URL, APIKey: "k2", Model: "m2", Timeout: 5 * time.Second}
+
+	authStore := auth.NewStore(map[string]string{"sk-cs-key1": "p1"})
+	resolver := project.NewResolver(map[string]map[string][]string{"p1": {"m": {"cfg1", "cfg2"}}})
+	lookup := &configLookup{upstreams: map[string]config.Upstream{"cfg1": cfg1, "cfg2": cfg2}}
+	fwd := NewStreamingForwarder()
+	log := logging.New(logging.Off, io.Discard)
+	h := NewHandler(authStore, resolver, lookup, fwd, log)
+
+	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"m"}`))
+	req.Header.Set("x-api-key", "sk-cs-key1")
+	req.Header.Set("content-type", "application/json")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != 401 {
+		t.Fatalf("expected 401 to be passed through, got %d", rec.Code)
+	}
+	if secondCalled {
+		t.Fatal("failover should not happen for 401 error")
+	}
+	if !strings.Contains(rec.Body.String(), "authentication_error") {
+		t.Fatal("expected 401 error body to be passed through")
+	}
+}

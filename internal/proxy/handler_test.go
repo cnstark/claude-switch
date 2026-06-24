@@ -251,11 +251,11 @@ func TestHandler_UsageDisabled_NoCollector(t *testing.T) {
 }
 
 func TestHandler_ErrorResponsePassthrough_NoCount(t *testing.T) {
-	// 上游返回 500 错误体（无 usage）→ 透传，不计数
+	// 上游返回 400 错误（不可重试）→ 透传，不计数
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "application/json")
-		w.WriteHeader(500)
-		w.Write([]byte(`{"type":"error","error":{"type":"overloaded_error","message":"overloaded"}}`))
+		w.WriteHeader(400)
+		w.Write([]byte(`{"type":"error","error":{"type":"invalid_request_error","message":"bad request"}}`))
 	}))
 	defer ts.Close()
 
@@ -273,8 +273,8 @@ func TestHandler_ErrorResponsePassthrough_NoCount(t *testing.T) {
 	req.Header.Set("x-api-key", "sk-cs-key1")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
-	if w.Code != 500 {
-		t.Fatalf("expected 500 passthrough, got %d", w.Code)
+	if w.Code != 400 {
+		t.Fatalf("expected 400 passthrough, got %d", w.Code)
 	}
 	if rec.calls != 0 {
 		t.Fatalf("expected no usage for error response, got %d", rec.calls)
