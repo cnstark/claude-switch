@@ -91,7 +91,7 @@ func TestTracker_ConcurrentRecordAndFlush(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < nPerWorker/5; j++ {
-				// Flush 错误可忽略 — 有些可能因竞争条件报错，dirty 会被恢复重试
+				// Flush 错误可忽略 — 并发写入同一 bucket 时可能因 io 时序短暂失败，dirty 会被恢复重试
 				tr.Flush()
 			}
 		}()
