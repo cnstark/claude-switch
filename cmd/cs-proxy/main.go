@@ -58,6 +58,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	// CS_LISTEN 环境变量覆盖配置文件中的 listen 地址。
+	// Docker 部署时需要设为 0.0.0.0:8787，因为容器内 127.0.0.1 不接收
+	// docker-proxy 通过 veth 网桥发来的连接。
+	if envListen := os.Getenv("CS_LISTEN"); envListen != "" {
+		snap.Server.Listen = envListen
+	}
+
 	// usage tracker：进程级单例，加载历史 usage.json 并启动后台刷盘。
 	// usage_stats 关闭时仍创建（保留历史数据、随时可热重载开启），仅不产生新记录。
 	usagePath := filepath.Join(filepath.Dir(configPath), "usage.json")

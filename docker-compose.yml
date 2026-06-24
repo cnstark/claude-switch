@@ -11,3 +11,5 @@ services:
     restart: unless-stopped
     environment:
       - CS_CONFIG=/root/.claude_switch/config.yaml
+      # Docker 端口映射通过 veth 网桥连接，容器内必须监听 0.0.0.0
+      - CS_LISTEN=0.0.0.0:8787
