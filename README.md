@@ -1,6 +1,37 @@
 # claude_switch
 
+[![Release](https://img.shields.io/github/v/release/cnstark/claude-switch?include_prereleases)](https://github.com/cnstark/claude-switch/releases)
+[![Go Report Card](https://goreportcard.com/badge/github.com/cnstark/claude-switch)](https://goreportcard.com/report/github.com/cnstark/claude-switch)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 本地反向代理服务器，让 Claude Code 连接 `127.0.0.1:8787` 并按项目粒度路由到不同上游 API。
+
+## 快速安装
+
+### Linux / macOS
+
+```bash
+curl -fsSL https://github.com/cnstark/claude-switch/releases/latest/download/install.sh | bash
+source ~/.claude_switch/env.sh
+```
+
+### Windows（PowerShell）
+
+```powershell
+irm https://github.com/cnstark/claude-switch/releases/latest/download/install.ps1 | iex
+& $env:USERPROFILE\.claude_switch\env.ps1
+```
+
+### Docker
+
+```bash
+# 下载 docker-compose.yml
+wget https://raw.githubusercontent.com/cnstark/claude-switch/master/docker-compose.yml
+# 启动
+docker-compose up -d
+```
+
+> 首次使用请继续阅读下方[快速开始](#快速开始)配置上游和映射。
 
 ## 安装
 
@@ -201,6 +232,24 @@ WantedBy=default.target
 systemctl --user daemon-reload
 systemctl --user enable --now cs-proxy
 ```
+
+## Docker 部署
+
+```bash
+# 下载 docker-compose.yml（如果还没下载）
+wget https://raw.githubusercontent.com/cnstark/claude-switch/master/docker-compose.yml
+
+# 启动
+docker-compose up -d
+
+# 查看日志
+docker-compose logs -f
+
+# 停止
+docker-compose down
+```
+
+> 容器使用 `ghcr.io/cnstark/claude-switch:latest` 镜像，首次启动会自动拉取。
 
 ## 安全
 
