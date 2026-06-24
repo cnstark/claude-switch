@@ -47,39 +47,28 @@ func (h *ReloadingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Build resolver from current snapshot
 	projData := make(map[string]map[string][]string, len(snap.Projects))
-	var currentLogLevel string
+	projectLogLevels := make(map[string]config.LogLevel, len(snap.Projects))
 	for name, p := range snap.Projects {
 		projData[name] = p.ModelMap
-		// Track log level for the first project (used for request logging)
-		if currentLogLevel == "" {
-			currentLogLevel = string(p.LogLevel)
-		}
+		projectLogLevels[name] = p.LogLevel
 	}
 	resolver := project.NewResolver(projData)
 	lookup := &snapshotLookup{snap: snap}
 
-	// Determine log level from the first project's config (default: off)
-	lvl := logging.Off
-	for _, p := range snap.Projects {
-		switch p.LogLevel {
-		case "debug", "Debug":
-			lvl = logging.Debug
-		case "meta", "Meta":
-			lvl = logging.Meta
-		}
-		break // use first project's log level
-	}
-	log := logging.New(lvl, os.Stderr)
+	// 初始 logger 使用 Meta 级别，确保鉴权失败等关键事件被记录。
+	// 鉴权成功后 Handler 会根据请求所属 project 的 log_level 动态调整。
+	log := logging.New(logging.Meta, os.Stderr)
 
 	// Build handler with current snapshot dependencies
 	handler := &Handler{
-		auth:         h.authStore,
-		resolver:     resolver,
-		lookup:       lookup,
-		forwarder:    h.forwarder,
-		log:          log,
-		tracker:      h.tracker,
-		usageEnabled: snap.Server.UsageStats,
+		auth:             h.authStore,
+		resolver:         resolver,
+		lookup:           lookup,
+		forwarder:        h.forwarder,
+		log:              log,
+		tracker:          h.tracker,
+		usageEnabled:     snap.Server.UsageStats,
+		projectLogLevels: projectLogLevels,
 	}
 
 	handler.ServeHTTP(w, r)

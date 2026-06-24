@@ -60,3 +60,8 @@ func (l *Logger) log(minLevel Level, msg string, fields map[string]any) {
 func (l *Logger) Level() Level {
 	return l.level
 }
+
+// SetLevel 动态设置日志级别（并发不安全，调用者需保证无并发访问）
+func (l *Logger) SetLevel(level Level) {
+	l.level = level
+}

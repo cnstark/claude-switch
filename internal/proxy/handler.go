@@ -35,13 +35,14 @@ type Forwarder interface {
 
 // Handler 代理 HTTP handler
 type Handler struct {
-	auth         AuthStore
-	resolver     ModelResolver
-	lookup       ConfigLookup
-	forwarder    Forwarder
-	log          *logging.Logger
-	tracker      usage.Recorder // nil = usage 关闭
-	usageEnabled bool           // 来自 per-request snapshot.Server.UsageStats
+	auth             AuthStore
+	resolver         ModelResolver
+	lookup           ConfigLookup
+	forwarder        Forwarder
+	log              *logging.Logger
+	tracker          usage.Recorder // nil = usage 关闭
+	usageEnabled     bool           // 来自 per-request snapshot.Server.UsageStats
+	projectLogLevels map[string]config.LogLevel
 }
 
 // NewHandler 创建代理 handler
@@ -78,6 +79,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "authentication_error", "无效的 API key")
 		return
 	}
+
+	// 根据请求所属 project 设置日志级别（每个 project 可独立配置 log_level）
+	h.log.SetLevel(logLevelForProject(projectName, h.projectLogLevels))
 
 	// 2. 记录请求头（debug 级别，辅助排查上游兼容性问题）
 	h.log.Debug("request headers", map[string]any{
@@ -196,6 +200,27 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		"model":   requestModel,
 	})
 	writeError(w, http.StatusBadGateway, "upstream_error", "所有上游均不可用")
+}
+
+// logLevelForProject 根据 project 名查找对应的日志级别，未找到时默认 Meta。
+func logLevelForProject(projectName string, levels map[string]config.LogLevel) logging.Level {
+	if levels == nil {
+		return logging.Meta
+	}
+	ll, ok := levels[projectName]
+	if !ok {
+		return logging.Meta
+	}
+	switch ll {
+	case config.LogDebug:
+		return logging.Debug
+	case config.LogMeta:
+		return logging.Meta
+	case config.LogOff:
+		return logging.Off
+	default:
+		return logging.Meta
+	}
 }
 
 // rewriteRequestBody 替换 JSON 请求体中的 model 字段。
