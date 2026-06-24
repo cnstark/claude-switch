@@ -39,8 +39,10 @@ func main() {
 	rootCmd.AddCommand(&cobra.Command{
 		Use:   "version",
 		Short: "打印版本号",
-		Run: func(cmd *cobra.Command, args []string) {
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
 			fmt.Println("cs version", version)
+			return nil
 		},
 	})
 
