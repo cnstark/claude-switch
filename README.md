@@ -125,6 +125,61 @@ cs proxy logs --project myproject --level debug  # 筛选
 
 代理运行时修改 `~/.claude_switch/config.yaml` 后自动检测并加载，无需重启。校验失败时保留旧配置。
 
+## Token 用量统计
+
+代理可记录每个请求的 token 用量（`input` / `output` / `cache_creation` / `cache_read`），按 project / model / date 汇总，便于成本核算与用量分析。默认**关闭**，需手动开启。
+
+### 开启
+
+在 `~/.claude_switch/config.yaml` 的 `server` 节添加 `usage_stats: true`：
+
+```yaml
+server:
+  listen: 127.0.0.1:8787
+  usage_stats: true          # 默认 false，开启后开始记录
+  private_keys:
+    sk-cs-abcd1234...: myproject
+```
+
+开关支持**热重载**——修改后无需重启即生效。关闭时不再产生新记录，但历史数据保留，可随时重新开启继续累积。
+
+### 数据存储
+
+用量持久化到 `~/.claude_switch/usage.json`（与 `config.yaml` 同目录）：
+
+- 代理启动时加载历史用量，后台每 10 秒刷盘一次，退出时执行最终 flush
+- 原子写入（临时文件 + `rename` 覆盖），刷盘失败保留 dirty 标记下次重试，不会丢失计数
+- 记录过程对请求转发完全透明（fail-soft：解析异常丢弃该行，采集异常被 recover 兜底，均不影响代理正常工作）
+
+### 计数语义
+
+- **仅在上游返回 usage 字段时计数**（解析 Anthropic 响应中的 `message_start` / `message_delta`）
+- **故障转移只计成功的那一个上游**：连接失败 / 超时 / `5xx` / `429` 触发重试时不计，只有最终成功的 cfg 计一次
+- 每个请求统计一次，按**响应结束日**归档到对应日期
+
+### 查询用量
+
+`cs stats` 读取 `usage.json` 并按表格输出，与代理进程及开关**无关**（随时可查，即便统计未开启）：
+
+```bash
+# 全部项目最近 7 天（默认）
+cs stats
+
+# 查看指定项目
+cs stats myproject
+
+# 自定义时间区间：1d / 7d / 30d 或 YYYY-MM-DD
+cs stats --since 30d
+cs stats --since 2026-06-01
+
+# 按模型过滤
+cs stats myproject --model claude-opus-4-8
+```
+
+输出列：`project | model | date | input | output | cache_creation | cache_read | total`。
+
+> 暂无数据时打印 `（暂无用量数据）`（文件不存在不报错）；若 `usage.json` 损坏则报错退出。
+
 ## systemd 自启
 
 ```ini
