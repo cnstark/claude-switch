@@ -9,6 +9,7 @@ docker-build-single:
 docker-build:
 	docker buildx build --platform $(PLATFORMS) -t $(IMAGE) --push .
 
+
 .PHONY: docker-push
 docker-push:
 	docker buildx build --platform $(PLATFORMS) -t $(IMAGE) --push .
