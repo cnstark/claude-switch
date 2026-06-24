@@ -1,10 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"github.com/cnstark/claude-switch/internal/auth"
 	"github.com/cnstark/claude-switch/internal/config"
 	"github.com/cnstark/claude-switch/internal/proxy"
-	"fmt"
+	"github.com/cnstark/claude-switch/internal/usage"
 	"os"
 	"path/filepath"
 	"time"
@@ -40,10 +41,16 @@ func main() {
 		os.Exit(1)
 	}
 
+	// usage tracker：进程级单例，加载历史 usage.json 并启动后台刷盘。
+	// usage_stats 关闭时仍创建（保留历史数据、随时可热重载开启），仅不产生新记录。
+	usagePath := filepath.Join(filepath.Dir(configPath), "usage.json")
+	tracker := usage.NewTracker(usagePath)
+	defer tracker.Close() // 优雅退出时 final flush
+
 	authStore := auth.NewStore(snap.Server.PrivateKeys)
 	fwd := proxy.NewStreamingForwarder()
 
-	handler := proxy.NewReloadingHandler(authStore, fwd, watcher)
+	handler := proxy.NewReloadingHandler(authStore, fwd, watcher, tracker)
 
 	srv := proxy.NewServer(watcher, handler)
 	if err := srv.Start(snap.Server.Listen); err != nil {
@@ -51,4 +58,3 @@ func main() {
 		os.Exit(1)
 	}
 }
-
