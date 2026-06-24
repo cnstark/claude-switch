@@ -31,7 +31,7 @@ func TestClient_Forward(t *testing.T) {
 	rec := httptest.NewRecorder()
 	err := client.Forward(cfg, []byte(`{"model":"real-model"}`), http.Header{
 		"Content-Type": []string{"application/json"},
-	}, rec, nil)
+	}, rec, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected forward error: %v", err)
 	}

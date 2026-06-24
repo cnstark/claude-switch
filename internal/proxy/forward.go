@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"github.com/cnstark/claude-switch/internal/config"
+	"github.com/cnstark/claude-switch/internal/logging"
 	"github.com/cnstark/claude-switch/internal/usage"
 	"io"
 	"net/http"
@@ -37,7 +38,7 @@ func (e *ResponseStartedError) Unwrap() error { return e.Err }
 // handler 据此不转移；连接阶段失败返回普通 error，handler 转移到下一个 cfg。
 // usage 语义：连接阶段失败（client.Do err）时 collector 未 Attach、不 Close → 不计数；
 // 成功流结束时 Close 触发一次 Record（仅当扫到 usage）。
-func (f *StreamingForwarder) Forward(cfg config.Upstream, body []byte, headers http.Header, w http.ResponseWriter, c *usage.Collector) error {
+func (f *StreamingForwarder) Forward(cfg config.Upstream, body []byte, headers http.Header, w http.ResponseWriter, c *usage.Collector, log *logging.Logger) error {
 	req, err := http.NewRequest("POST", cfg.URL+"/v1/messages", bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("创建上游请求失败: %w", err)
@@ -57,6 +58,55 @@ func (f *StreamingForwarder) Forward(cfg config.Upstream, body []byte, headers h
 	}
 	defer resp.Body.Close()
 
+	// Debug: 记录上游响应状态码和关键响应头
+	if log != nil {
+		log.Debug("upstream response received", map[string]any{
+			"status_code":  resp.StatusCode,
+			"status":       resp.Status,
+			"content_type": resp.Header.Get("content-type"),
+			"content_len":  resp.Header.Get("content-length"),
+		})
+	}
+
+	// 非 2xx 响应：缓冲完整响应体以便记录错误详情，然后非流式写出。
+	// 错误响应体通常很小（几 KB），不会造成内存压力。
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		errBody, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			if log != nil {
+				log.Debug("failed to read upstream error body", map[string]any{
+					"error": readErr.Error(),
+				})
+			}
+			return fmt.Errorf("读取上游错误响应体失败: %w", readErr)
+		}
+		if log != nil {
+			log.Debug("upstream error response body", map[string]any{
+				"body_len":  len(errBody),
+				"body_head": truncStr(string(errBody), 1024),
+				"body_tail": truncTail(string(errBody), 256),
+			})
+		}
+		// 透传响应头
+		for k, vs := range resp.Header {
+			for _, v := range vs {
+				w.Header().Add(k, v)
+			}
+		}
+		w.WriteHeader(resp.StatusCode)
+		if _, writeErr := w.Write(errBody); writeErr != nil {
+			return &ResponseStartedError{Err: fmt.Errorf("向客户端写入错误响应失败: %w", writeErr)}
+		}
+		// usage 收集：错误响应也可能包含 usage 信息（如 Anthropic 格式错误）
+		if c != nil {
+			c.Attach(resp.Header.Get("content-type"))
+			c.Feed(errBody)
+			c.Close()
+		}
+		return nil
+	}
+
+	// 2xx 响应：流式透传
 	// collector 按响应 content-type 选解析模式。注册在连接成功之后：
 	// 连接失败路径不会走到这里，Close 不会被调用 → 不计数。
 	if c != nil {

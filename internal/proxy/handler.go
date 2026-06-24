@@ -30,7 +30,7 @@ type ConfigLookup interface {
 
 // Forwarder 上游转发接口
 type Forwarder interface {
-	Forward(cfg config.Upstream, body []byte, headers http.Header, w http.ResponseWriter, c *usage.Collector) error
+	Forward(cfg config.Upstream, body []byte, headers http.Header, w http.ResponseWriter, c *usage.Collector, log *logging.Logger) error
 }
 
 // Handler 代理 HTTP handler
@@ -79,7 +79,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2. 读取请求体
+	// 2. 记录请求头（debug 级别，辅助排查上游兼容性问题）
+	h.log.Debug("request headers", map[string]any{
+		"content_type":   r.Header.Get("content-type"),
+		"accept":         r.Header.Get("accept"),
+		"user_agent":     r.Header.Get("user-agent"),
+		"anthropic_ver":  r.Header.Get("anthropic-version"),
+		"content_length": r.Header.Get("content-length"),
+	})
+
+	// 3. 读取请求体
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request_error", "无法读取请求体")
@@ -91,7 +100,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		"raw_body_head": truncStr(string(body), 512),
 	})
 
-	// 3. 解析 model
+	// 4. 解析 model
 	var reqBody map[string]any
 	if err := json.Unmarshal(body, &reqBody); err != nil {
 		h.log.Debug("request body json parse failed", map[string]any{
@@ -109,7 +118,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 4. 路由查表
+	// 5. 路由查表
 	cfgNames, ok := h.resolver.Resolve(projectName, requestModel)
 	if !ok {
 		h.log.Info("model not found", map[string]any{
@@ -129,7 +138,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		collector = usage.NewCollector(h.tracker, projectName, requestModel)
 	}
 
-	// 5. 依次尝试转发
+	// 6. 依次尝试转发
 	for _, cfgName := range cfgNames {
 		cfg, ok := h.lookup.Upstream(cfgName)
 		if !ok {
@@ -155,7 +164,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		reqHeaders := r.Header.Clone()
 		rewriteHeaders(reqHeaders, cfg.APIKey)
 
-		fwdErr := h.forwarder.Forward(cfg, rewrittenBody, reqHeaders, w, collector)
+		fwdErr := h.forwarder.Forward(cfg, rewrittenBody, reqHeaders, w, collector, h.log)
 		if fwdErr == nil {
 			h.log.Info("request forwarded", map[string]any{
 				"project":  projectName,
@@ -214,9 +223,10 @@ func rewriteRequestBody(body []byte, targetModel string) ([]byte, error) {
 	return out, nil
 }
 
-// rewriteHeaders 删除原 x-api-key，写入上游 key
+// rewriteHeaders 删除原认证头，写入上游 key
 func rewriteHeaders(h http.Header, upstreamKey string) {
 	h.Del("x-api-key")
+	h.Del("Authorization")
 	h.Set("x-api-key", upstreamKey)
 }
 

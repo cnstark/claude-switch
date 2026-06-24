@@ -309,7 +309,7 @@ func TestForward_UsageRecordedFromSSE(t *testing.T) {
 
 	fwd := NewStreamingForwarder()
 	w := httptest.NewRecorder()
-	err := fwd.Forward(cfg, []byte(`{}`), http.Header{"content-type": []string{"application/json"}}, w, c)
+	err := fwd.Forward(cfg, []byte(`{}`), http.Header{"content-type": []string{"application/json"}}, w, c, nil)
 	if err != nil {
 		t.Fatalf("forward error: %v", err)
 	}
@@ -341,7 +341,7 @@ func TestForward_UsageStreamByteIdenticalToNoCollector(t *testing.T) {
 		cfg := config.Upstream{Name: "cfg1", URL: ts.URL, APIKey: "k", Model: "m", Timeout: 5 * time.Second}
 		fwd := NewStreamingForwarder()
 		rec := httptest.NewRecorder()
-		_ = fwd.Forward(cfg, []byte(`{}`), http.Header{}, rec, c)
+		_ = fwd.Forward(cfg, []byte(`{}`), http.Header{}, rec, c, nil)
 		return rec.Body.Bytes()
 	}
 
@@ -362,7 +362,7 @@ func TestForward_ConnectionFailure_NoCommit(t *testing.T) {
 	c := usage.NewCollector(rec, "p1", "m")
 	fwd := NewStreamingForwarder()
 	w := httptest.NewRecorder()
-	_ = fwd.Forward(cfg, []byte(`{}`), http.Header{}, w, c)
+	_ = fwd.Forward(cfg, []byte(`{}`), http.Header{}, w, c, nil)
 	if rec.calls != 0 {
 		t.Fatalf("expected no commit on connection failure, got %d", rec.calls)
 	}

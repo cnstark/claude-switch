@@ -575,9 +575,22 @@ func loadConfig() (config.Config, error) {
 	snap, err := config.LoadFile(configPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return config.Config{
-				Server: config.Server{Listen: "127.0.0.1:8787"},
-			}, nil
+			// 配置文件不存在，自动创建默认配置
+			key, createErr := config.EnsureConfig(configPath)
+			if createErr != nil {
+				return config.Config{}, fmt.Errorf("自动创建配置文件失败: %w", createErr)
+			}
+			if key != "" {
+				fmt.Fprintf(os.Stderr, "已创建默认配置文件: %s\n", configPath)
+				fmt.Fprintf(os.Stderr, "默认私有 key: %s\n", key)
+				fmt.Fprintf(os.Stderr, "请使用 cs 命令添加上游和映射后，用 cs proxy start 启动代理\n\n")
+			}
+			// 重新加载
+			snap, err = config.LoadFile(configPath)
+			if err != nil {
+				return config.Config{}, fmt.Errorf("加载配置文件失败: %w", err)
+			}
+			return snap.Raw, nil
 		}
 		// 校验失败时尝试读取原始 YAML（允许不完整配置进行只读操作）
 		if raw, e := os.ReadFile(configPath); e == nil {

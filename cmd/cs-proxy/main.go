@@ -22,6 +22,15 @@ func main() {
 		configPath = filepath.Join(home, ".claude_switch", "config.yaml")
 	}
 
+	// 确保配置文件存在，不存在则自动创建默认配置
+	if key, err := config.EnsureConfig(configPath); err != nil {
+		fmt.Fprintf(os.Stderr, "创建配置文件失败: %v\n", err)
+		os.Exit(1)
+	} else if key != "" {
+		fmt.Fprintf(os.Stderr, "已创建默认配置文件: %s\n", configPath)
+		fmt.Fprintf(os.Stderr, "默认私有 key: %s\n", key)
+	}
+
 	if err := os.MkdirAll(filepath.Dir(configPath), 0700); err != nil {
 		fmt.Fprintf(os.Stderr, "无法创建配置目录: %v\n", err)
 		os.Exit(1)
@@ -33,11 +42,10 @@ func main() {
 	snap, err := watcher.Current()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "加载配置失败:", err)
-		fmt.Fprintln(os.Stderr, "请先使用 cs 命令创建配置：")
-		fmt.Fprintln(os.Stderr, "  1. cs key gen                  # 生成私有 key")
-		fmt.Fprintln(os.Stderr, "  2. cs project add <name> --key <sk-cs-...>  # 添加项目")
-		fmt.Fprintln(os.Stderr, "  3. cs upstream add <name> --url ... --apikey ... --model ...")
-		fmt.Fprintln(os.Stderr, "  4. cs mapping add <project> <model> <cfg>")
+		fmt.Fprintln(os.Stderr, "请先使用 cs 命令完善配置：")
+		fmt.Fprintln(os.Stderr, "  1. cs upstream add <name> --url ... --apikey ... --model ...")
+		fmt.Fprintln(os.Stderr, "  2. cs mapping add default <请求模型名> <上游名>")
+		fmt.Fprintln(os.Stderr, "  3. cs proxy restart")
 		os.Exit(1)
 	}
 
