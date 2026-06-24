@@ -7,7 +7,7 @@ docker-build-single:
 
 .PHONY: docker-build
 docker-build:
-	docker buildx build --platform $(PLATFORMS) -t $(IMAGE) --load .
+	docker buildx build --platform $(PLATFORMS) -t $(IMAGE) --push .
 
 .PHONY: docker-push
 docker-push:
