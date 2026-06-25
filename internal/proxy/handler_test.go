@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/cnstark/claude-switch/internal/auth"
+	"github.com/cnstark/claude-switch/internal/circuitbreaker"
 	"github.com/cnstark/claude-switch/internal/config"
 	"github.com/cnstark/claude-switch/internal/logging"
 	"github.com/cnstark/claude-switch/internal/project"
@@ -370,5 +371,242 @@ func TestHandler_MissingModelField_400(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code != 400 {
 		t.Fatalf("expected 400 for missing model field, got %d", rec.Code)
+	}
+}
+
+// ── Circuit breaker integration tests ──
+
+// TestBreaker_BackoffSkipsUpstream 验证退避期内跳过上游，故障转移到备选
+func TestBreaker_BackoffSkipsUpstream(t *testing.T) {
+	ts2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		w.WriteHeader(200)
+		w.Write([]byte(`{"status":"ok from backup"}`))
+	}))
+	defer ts2.Close()
+
+	ts1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		w.WriteHeader(503)
+		w.Write([]byte(`{"type":"error","error":{"type":"overloaded"}}`))
+	}))
+	defer ts1.Close()
+
+	cfg1 := config.Upstream{
+		Name: "cfg1", URL: ts1.URL, APIKey: "k1", Model: "m1",
+		Timeout: 5 * time.Second, RetryBackoff: []time.Duration{10 * time.Minute},
+	}
+	cfg2 := config.Upstream{
+		Name: "cfg2", URL: ts2.URL, APIKey: "k2", Model: "m2",
+		Timeout: 5 * time.Second,
+	}
+
+	breaker := circuitbreaker.NewBreaker()
+
+	h := &Handler{
+		auth:      auth.NewStore(map[string]string{"sk-cs-key1": "p1"}),
+		resolver:  project.NewResolver(map[string]map[string][]string{"p1": {"m": {"cfg1", "cfg2"}}}),
+		lookup:    &configLookup{upstreams: map[string]config.Upstream{"cfg1": cfg1, "cfg2": cfg2}},
+		forwarder: NewStreamingForwarder(),
+		log:       logging.New(logging.Off, io.Discard),
+		breaker:   breaker,
+	}
+
+	// 前两次请求：cfg1 返回 503，故障转移到 cfg2 成功；cfg1 累积 2 次失败进入退避
+	for i := 0; i < 2; i++ {
+		req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"m"}`))
+		req.Header.Set("x-api-key", "sk-cs-key1")
+		req.Header.Set("content-type", "application/json")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != 200 {
+			t.Fatalf("request %d: expected 200 via cfg2, got %d: %s", i+1, rec.Code, rec.Body.String())
+		}
+	}
+
+	// 第三次请求：cfg1 在退避期内，直接被跳过，只用 cfg2
+	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"m"}`))
+	req.Header.Set("x-api-key", "sk-cs-key1")
+	req.Header.Set("content-type", "application/json")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("expected 200 via cfg2 (cfg1 in backoff), got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestBreaker_SingleUpstream_ForcesProbe 验证单 upstream 全部被跳过时兜底探测
+func TestBreaker_SingleUpstream_ForcesProbe(t *testing.T) {
+	ts503 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		w.WriteHeader(503)
+		w.Write([]byte(`{"type":"error","error":{"type":"overloaded"}}`))
+	}))
+	defer ts503.Close()
+
+	ts200 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		w.WriteHeader(200)
+		w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer ts200.Close()
+
+	breaker := circuitbreaker.NewBreaker()
+
+	cfg503 := config.Upstream{
+		Name: "cfg1", URL: ts503.URL, APIKey: "k1", Model: "m1",
+		Timeout: 5 * time.Second, RetryBackoff: []time.Duration{10 * time.Minute},
+	}
+
+	h503 := &Handler{
+		auth:      auth.NewStore(map[string]string{"sk-cs-key1": "p1"}),
+		resolver:  project.NewResolver(map[string]map[string][]string{"p1": {"m": {"cfg1"}}}),
+		lookup:    &configLookup{upstreams: map[string]config.Upstream{"cfg1": cfg503}},
+		forwarder: NewStreamingForwarder(),
+		log:       logging.New(logging.Off, io.Discard),
+		breaker:   breaker,
+	}
+
+	// 两次 503 触发退避（每个请求 cfg1 返回可重试错误，最终 502）
+	for i := 0; i < 2; i++ {
+		req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"m"}`))
+		req.Header.Set("x-api-key", "sk-cs-key1")
+		req.Header.Set("content-type", "application/json")
+		rec := httptest.NewRecorder()
+		h503.ServeHTTP(rec, req)
+		if rec.Code != 502 {
+			t.Fatalf("request %d: expected 502 (only one upstream in backoff), got %d", i+1, rec.Code)
+		}
+	}
+
+	// 第三次请求：cfg1 在退避期内，但单 upstream 触发兜底强制探测
+	// 换回正常的 upstream（返回 200）验证强制探测能成功
+	cfg200 := config.Upstream{
+		Name: "cfg1", URL: ts200.URL, APIKey: "k1", Model: "m1",
+		Timeout: 5 * time.Second, RetryBackoff: []time.Duration{10 * time.Minute},
+	}
+	h := &Handler{
+		auth:      auth.NewStore(map[string]string{"sk-cs-key1": "p1"}),
+		resolver:  project.NewResolver(map[string]map[string][]string{"p1": {"m": {"cfg1"}}}),
+		lookup:    &configLookup{upstreams: map[string]config.Upstream{"cfg1": cfg200}},
+		forwarder: NewStreamingForwarder(),
+		log:       logging.New(logging.Off, io.Discard),
+		breaker:   breaker,
+	}
+	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"m"}`))
+	req.Header.Set("x-api-key", "sk-cs-key1")
+	req.Header.Set("content-type", "application/json")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("expected forced probe to succeed with 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestBreaker_NoBackoffUpstream_NotAffected 验证无 backoff 的 upstream 不受影响
+func TestBreaker_NoBackoffUpstream_NotAffected(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		w.WriteHeader(200)
+		w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer ts.Close()
+
+	cfg1 := config.Upstream{
+		Name: "cfg1", URL: ts.URL, APIKey: "k1", Model: "m1",
+		Timeout: 5 * time.Second, // 无 RetryBackoff
+	}
+
+	breaker := circuitbreaker.NewBreaker()
+
+	h := &Handler{
+		auth:      auth.NewStore(map[string]string{"sk-cs-key1": "p1"}),
+		resolver:  project.NewResolver(map[string]map[string][]string{"p1": {"m": {"cfg1"}}}),
+		lookup:    &configLookup{upstreams: map[string]config.Upstream{"cfg1": cfg1}},
+		forwarder: NewStreamingForwarder(),
+		log:       logging.New(logging.Off, io.Discard),
+		breaker:   breaker,
+	}
+
+	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"m"}`))
+	req.Header.Set("x-api-key", "sk-cs-key1")
+	req.Header.Set("content-type", "application/json")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("expected 200 for upstream without backoff, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestBreaker_4xxNotCounted 验证不可重试的 4xx 不计入熔断
+func TestBreaker_4xxNotCounted(t *testing.T) {
+	ts2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		w.WriteHeader(200)
+		w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer ts2.Close()
+
+	ts1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		w.WriteHeader(400)
+		w.Write([]byte(`{"type":"error","error":{"type":"invalid_request_error"}}`))
+	}))
+	defer ts1.Close()
+
+	cfg1 := config.Upstream{
+		Name: "cfg1", URL: ts1.URL, APIKey: "k1", Model: "m1",
+		Timeout: 5 * time.Second, RetryBackoff: []time.Duration{10 * time.Minute},
+	}
+	cfg2 := config.Upstream{
+		Name: "cfg2", URL: ts2.URL, APIKey: "k2", Model: "m2",
+		Timeout: 5 * time.Second, RetryBackoff: []time.Duration{10 * time.Minute},
+	}
+
+	breaker := circuitbreaker.NewBreaker()
+
+	h := &Handler{
+		auth:      auth.NewStore(map[string]string{"sk-cs-key1": "p1"}),
+		resolver:  project.NewResolver(map[string]map[string][]string{"p1": {"m": {"cfg1", "cfg2"}}}),
+		lookup:    &configLookup{upstreams: map[string]config.Upstream{"cfg1": cfg1, "cfg2": cfg2}},
+		forwarder: NewStreamingForwarder(),
+		log:       logging.New(logging.Off, io.Discard),
+		breaker:   breaker,
+	}
+
+	// 多次 400（不可重试），不应触发 cfg1 的熔断
+	for i := 0; i < 3; i++ {
+		req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"m"}`))
+		req.Header.Set("x-api-key", "sk-cs-key1")
+		req.Header.Set("content-type", "application/json")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		// 400 应直接透传，不故障转移到 cfg2
+		if rec.Code != 400 {
+			t.Fatalf("request %d: expected 400 passthrough, got %d", i+1, rec.Code)
+		}
+	}
+
+	// 确认 cfg1 未被熔断：换一个返回 200 的 upstream 验证
+	ts200 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		w.WriteHeader(200)
+		w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer ts200.Close()
+
+	cfg1OK := config.Upstream{
+		Name: "cfg1", URL: ts200.URL, APIKey: "k1", Model: "m1",
+		Timeout: 5 * time.Second, RetryBackoff: []time.Duration{10 * time.Minute},
+	}
+	h.lookup = &configLookup{upstreams: map[string]config.Upstream{"cfg1": cfg1OK, "cfg2": cfg2}}
+
+	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"m"}`))
+	req.Header.Set("x-api-key", "sk-cs-key1")
+	req.Header.Set("content-type", "application/json")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("cfg1 should not be in backoff (4xx not counted), expected 200, got %d", rec.Code)
 	}
 }
