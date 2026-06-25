@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"github.com/cnstark/claude-switch/internal/auth"
+	"github.com/cnstark/claude-switch/internal/circuitbreaker"
 	"github.com/cnstark/claude-switch/internal/config"
 	"github.com/cnstark/claude-switch/internal/proxy"
 	"github.com/cnstark/claude-switch/internal/usage"
@@ -74,7 +75,9 @@ func main() {
 	authStore := auth.NewStore(snap.Server.PrivateKeys)
 	fwd := proxy.NewStreamingForwarder()
 
-	handler := proxy.NewReloadingHandler(authStore, fwd, watcher, tracker)
+	breaker := circuitbreaker.NewBreaker()
+
+	handler := proxy.NewReloadingHandler(authStore, fwd, watcher, tracker, breaker)
 
 	srv := proxy.NewServer(watcher, handler)
 	if err := srv.Start(snap.Server.Listen); err != nil {

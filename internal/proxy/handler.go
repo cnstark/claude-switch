@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/cnstark/claude-switch/internal/circuitbreaker"
 	"github.com/cnstark/claude-switch/internal/config"
 	"github.com/cnstark/claude-switch/internal/logging"
 	"github.com/cnstark/claude-switch/internal/usage"
@@ -43,6 +44,7 @@ type Handler struct {
 	tracker          usage.Recorder // nil = usage 关闭
 	usageEnabled     bool           // 来自 per-request snapshot.Server.UsageStats
 	projectLogLevels map[string]config.LogLevel
+	breaker          *circuitbreaker.Breaker // nil = 不启用熔断
 }
 
 // NewHandler 创建代理 handler
@@ -143,11 +145,25 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 6. 依次尝试转发
+	allSkipped := true
 	for _, cfgName := range cfgNames {
 		cfg, ok := h.lookup.Upstream(cfgName)
 		if !ok {
 			continue
 		}
+
+		// 检查熔断器
+		if h.breaker != nil {
+			if avail, reason := h.breaker.IsAvailable(cfgName, cfg.RetryBackoff); !avail {
+				h.log.Info("circuit breaker skipped", map[string]any{
+					"upstream": cfgName,
+					"reason":   reason,
+				})
+				continue
+			}
+		}
+		allSkipped = false
+
 		// 故障转移时更新 usage collector 的 model 为上游真实模型名
 		if collector != nil {
 			collector.SetModel(cfg.Model)
@@ -175,6 +191,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				"model":    requestModel,
 				"upstream": cfgName,
 			})
+			// 记录成功
+			if h.breaker != nil {
+				if msg := h.breaker.RecordSuccess(cfgName); msg != "" {
+					h.log.Info(msg, nil)
+				}
+			}
 			return
 		}
 		// 不变量：响应已开始后（已 WriteHeader / 写了首字节）不得转移到下一个上游，
@@ -192,6 +214,54 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"upstream": cfgName,
 			"error":    fwdErr.Error(),
 		})
+
+		// 记录失败（可重试错误）
+		if h.breaker != nil {
+			if msg := h.breaker.RecordFailure(cfgName, cfg.RetryBackoff); msg != "" {
+				h.log.Info(msg, nil)
+			}
+		}
+	}
+
+	// 兜底逻辑：全部被跳过时强制探测第一个 upstream
+	if allSkipped && h.breaker != nil && len(cfgNames) > 0 {
+		cfgName := cfgNames[0]
+		cfg, ok := h.lookup.Upstream(cfgName)
+		if ok {
+			h.log.Info("all upstreams in backoff, forcing probe", map[string]any{
+				"upstream": cfgName,
+			})
+
+			if collector != nil {
+				collector.SetModel(cfg.Model)
+			}
+			rewrittenBody, err := rewriteRequestBody(body, cfg.Model)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "internal_error", "请求重写失败")
+				return
+			}
+			reqHeaders := r.Header.Clone()
+			rewriteHeaders(reqHeaders, cfg.APIKey)
+
+			fwdErr := h.forwarder.Forward(cfg, rewrittenBody, reqHeaders, w, collector, h.log)
+			if fwdErr == nil {
+				h.log.Info("forced probe succeeded", map[string]any{
+					"project":  projectName,
+					"model":    requestModel,
+					"upstream": cfgName,
+				})
+				if msg := h.breaker.RecordSuccess(cfgName); msg != "" {
+					h.log.Info(msg, nil)
+				}
+				return
+			}
+			var startedErr *ResponseStartedError
+			if !errors.As(fwdErr, &startedErr) {
+				if msg := h.breaker.RecordFailure(cfgName, cfg.RetryBackoff); msg != "" {
+					h.log.Info(msg, nil)
+				}
+			}
+		}
 	}
 
 	// 全部失败

@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"github.com/cnstark/claude-switch/internal/auth"
+	"github.com/cnstark/claude-switch/internal/circuitbreaker"
 	"github.com/cnstark/claude-switch/internal/config"
 	"github.com/cnstark/claude-switch/internal/logging"
 	"github.com/cnstark/claude-switch/internal/project"
@@ -17,6 +18,7 @@ type ReloadingHandler struct {
 	forwarder Forwarder
 	watcher   *config.Watcher
 	tracker   usage.Recorder
+	breaker   *circuitbreaker.Breaker
 }
 
 // NewReloadingHandler 创建支持热重载的 handler。tracker 为进程级 usage 记录器。
@@ -25,12 +27,14 @@ func NewReloadingHandler(
 	forwarder Forwarder,
 	watcher *config.Watcher,
 	tracker usage.Recorder,
+	breaker *circuitbreaker.Breaker,
 ) *ReloadingHandler {
 	return &ReloadingHandler{
 		authStore: authStore,
 		forwarder: forwarder,
 		watcher:   watcher,
 		tracker:   tracker,
+		breaker:   breaker,
 	}
 }
 
@@ -69,6 +73,7 @@ func (h *ReloadingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		tracker:          h.tracker,
 		usageEnabled:     snap.Server.UsageStats,
 		projectLogLevels: projectLogLevels,
+		breaker:          h.breaker,
 	}
 
 	handler.ServeHTTP(w, r)

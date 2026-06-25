@@ -328,7 +328,7 @@ projects:
 	}
 	authStore := auth.NewStore(snap.Server.PrivateKeys)
 	fwd := NewStreamingForwarder()
-	handler := NewReloadingHandler(authStore, fwd, watcher, tracker)
+	handler := NewReloadingHandler(authStore, fwd, watcher, tracker, nil)
 
 	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"m"}`))
 	req.Header.Set("x-api-key", "sk-cs-key1")
