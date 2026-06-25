@@ -11,11 +11,12 @@ type Server struct {
 
 // Upstream 上游 API 配置（cfg）
 type Upstream struct {
-	Name    string        `yaml:"name"`
-	URL     string        `yaml:"url"`
-	APIKey  string        `yaml:"apikey"`
-	Model   string        `yaml:"model"`
-	Timeout time.Duration `yaml:"timeout"`
+	Name         string          `yaml:"name"`
+	URL          string          `yaml:"url"`
+	APIKey       string          `yaml:"apikey"`
+	Model        string          `yaml:"model"`
+	Timeout      time.Duration   `yaml:"timeout"`
+	RetryBackoff []time.Duration `yaml:"retry_backoff"` // 可选，最多 4 档退避时间；nil/空 = 关闭断路器
 }
 
 // LogLevel 日志级别

@@ -432,3 +432,120 @@ projects:
 		t.Fatal("expected usage_stats default false")
 	}
 }
+
+func TestValidate_RetryBackoff_Valid(t *testing.T) {
+	cfg := Config{
+		Server:    Server{Listen: "127.0.0.1:8787", PrivateKeys: map[string]string{"sk-cs-key1": "p1"}},
+		Upstreams: []Upstream{
+			{Name: "cfg1", URL: "https://a.com", APIKey: "k1", Model: "m1", Timeout: 60 * time.Second,
+				RetryBackoff: []time.Duration{30 * time.Second, 2 * time.Minute, 5 * time.Minute, 15 * time.Minute}},
+		},
+		Projects: []Project{
+			{Name: "p1", ModelMap: map[string][]string{"m": {"cfg1"}}},
+		},
+	}
+	if err := Validate(cfg); err != nil {
+		t.Fatalf("expected valid retry_backoff, got: %v", err)
+	}
+}
+
+func TestValidate_RetryBackoff_TooManyTiers(t *testing.T) {
+	cfg := Config{
+		Server:    Server{Listen: "127.0.0.1:8787", PrivateKeys: map[string]string{"sk-cs-key1": "p1"}},
+		Upstreams: []Upstream{
+			{Name: "cfg1", URL: "https://a.com", APIKey: "k1", Model: "m1", Timeout: 60 * time.Second,
+				RetryBackoff: []time.Duration{1 * time.Second, 2 * time.Second, 3 * time.Second, 4 * time.Second, 5 * time.Second}},
+		},
+		Projects: []Project{
+			{Name: "p1", ModelMap: map[string][]string{"m": {"cfg1"}}},
+		},
+	}
+	if err := Validate(cfg); err == nil {
+		t.Fatal("expected error for >4 retry_backoff tiers")
+	}
+}
+
+func TestValidate_RetryBackoff_NegativeDuration(t *testing.T) {
+	cfg := Config{
+		Server:    Server{Listen: "127.0.0.1:8787", PrivateKeys: map[string]string{"sk-cs-key1": "p1"}},
+		Upstreams: []Upstream{
+			{Name: "cfg1", URL: "https://a.com", APIKey: "k1", Model: "m1", Timeout: 60 * time.Second,
+				RetryBackoff: []time.Duration{30 * time.Second, -1 * time.Second}},
+		},
+		Projects: []Project{
+			{Name: "p1", ModelMap: map[string][]string{"m": {"cfg1"}}},
+		},
+	}
+	if err := Validate(cfg); err == nil {
+		t.Fatal("expected error for negative retry_backoff duration")
+	}
+}
+
+func TestLoad_RetryBackoff_RoundTrip(t *testing.T) {
+	yamlData := `
+server:
+  listen: 127.0.0.1:8787
+  private_keys:
+    sk-cs-key1: project1
+upstreams:
+  - name: cfg1
+    url: https://api.anthropic.com
+    apikey: sk-ant-xxx
+    model: claude-opus-4-8
+    timeout: 60s
+    retry_backoff: [30s, 2m, 5m, 15m]
+projects:
+  - name: project1
+    log_level: off
+    model_map:
+      modelA: [cfg1]
+`
+	snap, err := Load([]byte(yamlData))
+	if err != nil {
+		t.Fatalf("unexpected load error: %v", err)
+	}
+	cfg1 := snap.Upstreams["cfg1"]
+	if len(cfg1.RetryBackoff) != 4 {
+		t.Fatalf("expected 4 backoff tiers, got %d", len(cfg1.RetryBackoff))
+	}
+	if cfg1.RetryBackoff[0] != 30*time.Second {
+		t.Fatalf("expected T1=30s, got %s", cfg1.RetryBackoff[0])
+	}
+	if cfg1.RetryBackoff[1] != 2*time.Minute {
+		t.Fatalf("expected T2=2m, got %s", cfg1.RetryBackoff[1])
+	}
+	if cfg1.RetryBackoff[2] != 5*time.Minute {
+		t.Fatalf("expected T3=5m, got %s", cfg1.RetryBackoff[2])
+	}
+	if cfg1.RetryBackoff[3] != 15*time.Minute {
+		t.Fatalf("expected T4=15m, got %s", cfg1.RetryBackoff[3])
+	}
+}
+
+func TestLoad_RetryBackoff_DefaultEmpty(t *testing.T) {
+	yamlData := `
+server:
+  listen: 127.0.0.1:8787
+  private_keys:
+    sk-cs-key1: project1
+upstreams:
+  - name: cfg1
+    url: https://api.anthropic.com
+    apikey: sk-ant-xxx
+    model: claude-opus-4-8
+    timeout: 60s
+projects:
+  - name: project1
+    log_level: off
+    model_map:
+      modelA: [cfg1]
+`
+	snap, err := Load([]byte(yamlData))
+	if err != nil {
+		t.Fatalf("unexpected load error: %v", err)
+	}
+	cfg1 := snap.Upstreams["cfg1"]
+	if len(cfg1.RetryBackoff) != 0 {
+		t.Fatalf("expected empty retry_backoff by default, got %d", len(cfg1.RetryBackoff))
+	}
+}

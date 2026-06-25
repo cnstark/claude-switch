@@ -62,7 +62,19 @@ func Validate(cfg Config) error {
 		}
 	}
 
-	// 6. log_level 合法性
+	// 6. retry_backoff 校验
+	for _, u := range cfg.Upstreams {
+		if len(u.RetryBackoff) > 4 {
+			return fmt.Errorf("upstreams.%s.retry_backoff: 最多支持 4 档退避时间，当前 %d 档", u.Name, len(u.RetryBackoff))
+		}
+		for i, d := range u.RetryBackoff {
+			if d <= 0 {
+				return fmt.Errorf("upstreams.%s.retry_backoff[%d]: 退避时间必须为正数，当前 %s", u.Name, i, d)
+			}
+		}
+	}
+
+	// 7. log_level 合法性
 	for _, p := range cfg.Projects {
 		switch p.LogLevel {
 		case "", LogOff, LogMeta, LogDebug:
