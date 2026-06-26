@@ -3,6 +3,7 @@ package proxy
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"fmt"
 	"github.com/cnstark/claude-switch/internal/auth"
 	"github.com/cnstark/claude-switch/internal/circuitbreaker"
 	"github.com/cnstark/claude-switch/internal/config"
@@ -98,10 +99,13 @@ func (h *ReloadingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	handler.ServeHTTP(w, r)
 }
 
-// generateShortID 生成 8 字符 base64 随机 ID
+// generateShortID 生成 8 字符 base64 随机 ID。
+// crypto/rand 几乎不会失败；失败时退化为时间戳 ID，保证唯一且非常量（request-id 非安全令牌）。
 func generateShortID() string {
 	b := make([]byte, 6)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("%x", time.Now().UnixNano())
+	}
 	return strings.TrimRight(base64.URLEncoding.EncodeToString(b), "=")
 }
 

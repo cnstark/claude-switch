@@ -15,6 +15,10 @@ func NewDualHandler(a, b slog.Handler) *DualHandler {
 	return &DualHandler{a: a, b: b}
 }
 
+// Enabled 采用 OR 语义：任一子 handler 启用即通过。
+// 注意：Handle 会无条件调用两个子 handler，子 handler 内部不再复查 Enabled，
+// 因此仅当两个子 handler 共用同一级别时语义一致；若级别不对称，"已禁用"的一方仍会被写入。
+// 当前用法两个子 handler 共享 server 级别，无此问题。
 func (h *DualHandler) Enabled(ctx context.Context, level slog.Level) bool {
 	return h.a.Enabled(ctx, level) || h.b.Enabled(ctx, level)
 }
