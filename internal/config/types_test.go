@@ -581,17 +581,17 @@ func TestNewSnapshot_ProjectLogLevelDefaults(t *testing.T) {
 
 	// meta 应被映射为 info
 	if snap.Projects["p1"].LogLevel != LogInfo {
-		t.Fatalf("expected p1.LogLevel=%q (meta→info), got %q", LogInfo, snap.Projects["p1"].LogLevel)
+		t.Errorf("expected p1.LogLevel=%q (meta→info), got %q", LogInfo, snap.Projects["p1"].LogLevel)
 	}
 	// 空值应被填充为 off
 	if snap.Projects["p2"].LogLevel != LogOff {
-		t.Fatalf("expected p2.LogLevel=%q (default off), got %q", LogOff, snap.Projects["p2"].LogLevel)
+		t.Errorf("expected p2.LogLevel=%q (default off), got %q", LogOff, snap.Projects["p2"].LogLevel)
 	}
 
 	// 验证一致性：snapshot.Projects 与 snapshot.Raw.Projects 的值一致
 	for i, p := range snap.Raw.Projects {
 		if snap.Projects[p.Name].LogLevel != p.LogLevel {
-			t.Fatalf("inconsistency: snapshot.Projects[%q].LogLevel=%q != snapshot.Raw.Projects[%d].LogLevel=%q",
+			t.Errorf("inconsistency: snapshot.Projects[%q].LogLevel=%q != snapshot.Raw.Projects[%d].LogLevel=%q",
 				p.Name, snap.Projects[p.Name].LogLevel, i, p.LogLevel)
 		}
 	}
