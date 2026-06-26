@@ -1,67 +1,77 @@
 package logging
 
 import (
-	"encoding/json"
 	"io"
-	"time"
+	"log/slog"
+	"os"
+	"path/filepath"
 )
 
-// Level 日志级别
-type Level int
-
-const (
-	Off   Level = 0
-	Meta  Level = 1
-	Debug Level = 2
-)
-
-// Logger 结构化 JSON 行日志
-type Logger struct {
-	level  Level
-	writer io.Writer
+// NewStdErrLogger 创建仅输出到 stderr 的 TextHandler logger，用于启动阶段。
+func NewStdErrLogger(level slog.Leveler) *slog.Logger {
+	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 }
 
-// New 创建 Logger
-func New(level Level, w io.Writer) *Logger {
-	return &Logger{level: level, writer: w}
-}
-
-// Info 记录 Meta 级别日志
-func (l *Logger) Info(msg string, fields map[string]any) {
-	l.log(Meta, msg, fields)
-}
-
-// Debug 记录 Debug 级别日志
-func (l *Logger) Debug(msg string, fields map[string]any) {
-	l.log(Debug, msg, fields)
-}
-
-// Log 记录 Meta 级别信息（与 Info 等价）。受 off 级别限制。
-func (l *Logger) Log(msg string, fields map[string]any) {
-	l.log(Meta, msg, fields)
-}
-
-func (l *Logger) log(minLevel Level, msg string, fields map[string]any) {
-	if l.level < minLevel {
-		return
+// NewLogger 创建双写 logger（文件 JSON + stderr Text）。
+// logFile 为空时使用 DefaultLogDir()/cs-proxy.log。
+func NewLogger(level slog.Leveler, logFile string, maxDays int) (*slog.Logger, error) {
+	if logFile == "" {
+		logFile = filepath.Join(DefaultLogDir(), "cs-proxy.log")
 	}
-	entry := make(map[string]any, len(fields)+3)
-	entry["time"] = time.Now().UTC().Format(time.RFC3339)
-	entry["level"] = int(minLevel)
-	entry["msg"] = msg
-	for k, v := range fields {
-		entry[k] = v
+	dir := filepath.Dir(logFile)
+	baseName := filepath.Base(logFile)
+
+	fileWriter, err := NewDailyRotateWriter(dir, baseName, maxDays)
+	if err != nil {
+		return nil, err
 	}
-	b, _ := json.Marshal(entry)
-	l.writer.Write(append(b, '\n'))
+
+	jsonHandler := slog.NewJSONHandler(fileWriter, &slog.HandlerOptions{Level: level})
+	textHandler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})
+	dualHandler := NewDualHandler(jsonHandler, textHandler)
+
+	return slog.New(dualHandler), nil
 }
 
-// Level 返回当前日志级别
-func (l *Logger) Level() Level {
-	return l.level
+// ParseLevel 将配置字符串转换为 slog.Level。无效值返回 defaultLevel。
+func ParseLevel(s string, defaultLevel slog.Level) slog.Level {
+	switch s {
+	case "off":
+		return slog.LevelError + 1
+	case "info", "meta":
+		return slog.LevelInfo
+	case "debug":
+		return slog.LevelDebug
+	default:
+		return defaultLevel
+	}
 }
 
-// SetLevel 动态设置日志级别（并发不安全，调用者需保证无并发访问）
-func (l *Logger) SetLevel(level Level) {
-	l.level = level
+// DefaultLogDir 返回默认日志目录 ~/.claude_switch/logs/。
+func DefaultLogDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join(".", "logs")
+	}
+	return filepath.Join(home, ".claude_switch", "logs")
+}
+
+// NewNopLogger 创建丢弃所有输出的 logger，用于测试。
+func NewNopLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError + 1}))
+}
+
+// MaskKey 脱敏 API key：保留前 8 字符 + "..." + 后 4 字符（短 key 适配）。
+func MaskKey(key string) string {
+	n := len(key)
+	if n == 0 {
+		return "..."
+	}
+	if n <= 4 {
+		return key[:1] + "..."
+	}
+	if n <= 12 {
+		return key[:4] + "..."
+	}
+	return key[:8] + "..." + key[n-4:]
 }
