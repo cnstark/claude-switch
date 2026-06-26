@@ -17,6 +17,7 @@ A local reverse proxy server that lets Claude Code connect to `127.0.0.1:8787` a
 - [Command Reference](#command-reference)
 - [Feature Details](#feature-details)
   - [Model Routing & Failover](#model-routing--failover)
+  - [allow_direct_access (Direct Model Name Access)](#allow_direct_access-direct-model-name-access)
   - [Circuit Breaker](#circuit-breaker)
   - [Hot Reload](#hot-reload)
   - [Token Usage Statistics](#token-usage-statistics)
@@ -290,6 +291,22 @@ Request processing pipeline:
 6. **Streaming pass-through**: Uses `http.Flusher` to forward SSE response chunk by chunk (4KB buffer), without buffering the full response
 
 > **Important**: Once the first byte is written to the client, failover is prohibited — streams cannot be merged after they've started.
+
+### allow_direct_access (Direct Model Name Access)
+
+When a project enables `allow_direct_access: true`, the `model` field in requests can directly use an upstream's `name` (cfg name) to route to that upstream, bypassing the `model_map` alias configuration.
+
+**Constraint:** `model_map` aliases must not collide with any `upstream.name`, otherwise validation fails (ensuring unambiguous routing).
+
+```yaml
+projects:
+  - name: default
+    allow_direct_access: true
+    model_map:
+      claude-opus: [anthropic]
+```
+
+Toggle via `cs project direct-access <name> <on|off>`.
 
 ### Circuit Breaker
 

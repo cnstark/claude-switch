@@ -35,6 +35,7 @@
     - [用量统计查询](#用量统计查询)
   - [功能详解](#功能详解)
     - [模型路由与故障转移](#模型路由与故障转移)
+    - [allow_direct_access（直接模型名访问）](#allow_direct_access直接模型名访问)
     - [熔断器](#熔断器)
     - [配置热重载](#配置热重载)
     - [Token 用量统计](#token-用量统计)
@@ -312,6 +313,22 @@ cs stats myproject --model claude-opus-4-8
 6. **流式透传**：使用 `http.Flusher` 逐 chunk（4KB 缓冲区）透传 SSE 响应，不缓冲完整响应体
 
 > **重要**：一旦开始向客户端写入响应（首字节已发送），不再切换上游——流式已开始后无法回退。
+
+### allow_direct_access（直接模型名访问）
+
+项目开启 `allow_direct_access: true` 后，请求中的 `model` 字段若等于某个 upstream 的 `name`（cfg 名），将直接路由到该上游，无需在 `model_map` 中配置别名。
+
+**约束：** `model_map` 的别名不得与任何 `upstream.name` 相同，否则校验失败（保证路由无歧义）。
+
+```yaml
+projects:
+  - name: default
+    allow_direct_access: true
+    model_map:
+      claude-opus: [anthropic]
+```
+
+可用 `cs project direct-access <name> <on|off>` 切换。
 
 ### 熔断器
 

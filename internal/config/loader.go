@@ -134,6 +134,7 @@ projects:
   - name: default
     log_level: off
     model_map: {}
+    # allow_direct_access: false  # 开启后可用 upstream.name 直接访问（无需配别名）
     # 示例 model_map，添加上游后按如下格式配置：
     # model_map:
     #   claude-sonnet-4-6:
