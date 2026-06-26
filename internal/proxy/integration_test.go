@@ -5,7 +5,6 @@ import (
 	"github.com/cnstark/claude-switch/internal/auth"
 	"github.com/cnstark/claude-switch/internal/config"
 	"github.com/cnstark/claude-switch/internal/logging"
-	"github.com/cnstark/claude-switch/internal/project"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -53,7 +52,7 @@ func TestIntegration_FullFlow(t *testing.T) {
 	}
 
 	authStore := auth.NewStore(keys)
-	resolver := project.NewResolver(projMap)
+	resolver := newAliasResolver(projMap)
 	lookup := &configLookup{upstreams: cfgUpstreams}
 	fwd := NewStreamingForwarder()
 	log := logging.NewNopLogger()
@@ -105,7 +104,7 @@ func TestIntegration_StreamingFullFlow(t *testing.T) {
 
 	handler := NewHandler(
 		auth.NewStore(keys),
-		project.NewResolver(projMap),
+		newAliasResolver(projMap),
 		&configLookup{upstreams: cfgUpstreams},
 		NewStreamingForwarder(),
 		logging.NewNopLogger(),
