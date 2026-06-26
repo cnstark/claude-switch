@@ -1,11 +1,11 @@
 package proxy
 
 import (
+	"encoding/json"
 	"github.com/cnstark/claude-switch/internal/auth"
 	"github.com/cnstark/claude-switch/internal/config"
 	"github.com/cnstark/claude-switch/internal/logging"
 	"github.com/cnstark/claude-switch/internal/project"
-	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -56,7 +56,7 @@ func TestIntegration_FullFlow(t *testing.T) {
 	resolver := project.NewResolver(projMap)
 	lookup := &configLookup{upstreams: cfgUpstreams}
 	fwd := NewStreamingForwarder()
-	log := logging.New(logging.Off, io.Discard)
+	log := logging.NewNopLogger()
 
 	handler := NewHandler(authStore, resolver, lookup, fwd, log)
 
@@ -108,7 +108,7 @@ func TestIntegration_StreamingFullFlow(t *testing.T) {
 		project.NewResolver(projMap),
 		&configLookup{upstreams: cfgUpstreams},
 		NewStreamingForwarder(),
-		logging.New(logging.Off, io.Discard),
+		logging.NewNopLogger(),
 	)
 
 	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"m","stream":true}`))

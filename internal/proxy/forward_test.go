@@ -95,7 +95,7 @@ func TestForward_BasicPassthrough(t *testing.T) {
 	resolver := project.NewResolver(map[string]map[string][]string{"p1": {"aliasModel": {"cfg1"}}})
 	lookup := &configLookup{upstreams: map[string]config.Upstream{"cfg1": cfg}}
 	fwd := NewStreamingForwarder()
-	log := logging.New(logging.Off, io.Discard)
+	log := logging.NewNopLogger()
 
 	h := NewHandler(authStore, resolver, lookup, fwd, log)
 
@@ -136,7 +136,7 @@ func TestForward_StreamingSSE(t *testing.T) {
 	resolver := project.NewResolver(map[string]map[string][]string{"p1": {"m": {"cfg1"}}})
 	lookup := &configLookup{upstreams: map[string]config.Upstream{"cfg1": cfg}}
 	fwd := NewStreamingForwarder()
-	log := logging.New(logging.Off, io.Discard)
+	log := logging.NewNopLogger()
 	h := NewHandler(authStore, resolver, lookup, fwd, log)
 
 	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"m","stream":true}`))
@@ -197,7 +197,7 @@ func TestFailover_ResponseBodyStarted_NoFailover(t *testing.T) {
 	resolver := project.NewResolver(map[string]map[string][]string{"p1": {"m": {"cfg1", "cfg2"}}})
 	lookup := &configLookup{upstreams: map[string]config.Upstream{"cfg1": cfg1, "cfg2": cfg2}}
 	fwd := NewStreamingForwarder()
-	log := logging.New(logging.Off, io.Discard)
+	log := logging.NewNopLogger()
 	h := NewHandler(authStore, resolver, lookup, fwd, log)
 
 	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"m"}`))
@@ -233,7 +233,7 @@ func TestFailover_FirstFails_FallbackSucceeds(t *testing.T) {
 	resolver := project.NewResolver(map[string]map[string][]string{"p1": {"m": {"cfg1", "cfg2"}}})
 	lookup := &configLookup{upstreams: map[string]config.Upstream{"cfg1": cfg1, "cfg2": cfg2}}
 	fwd := NewStreamingForwarder()
-	log := logging.New(logging.Off, io.Discard)
+	log := logging.NewNopLogger()
 	h := NewHandler(authStore, resolver, lookup, fwd, log)
 
 	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"m"}`))
@@ -258,7 +258,7 @@ func TestFailover_AllFail_502(t *testing.T) {
 	resolver := project.NewResolver(map[string]map[string][]string{"p1": {"m": {"cfg1", "cfg2"}}})
 	lookup := &configLookup{upstreams: map[string]config.Upstream{"cfg1": cfg1, "cfg2": cfg2}}
 	fwd := NewStreamingForwarder()
-	log := logging.New(logging.Off, io.Discard)
+	log := logging.NewNopLogger()
 	h := NewHandler(authStore, resolver, lookup, fwd, log)
 
 	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"m"}`))
@@ -391,7 +391,7 @@ func TestFailover_FirstReturns5xx_FallbackSucceeds(t *testing.T) {
 	resolver := project.NewResolver(map[string]map[string][]string{"p1": {"m": {"cfg1", "cfg2"}}})
 	lookup := &configLookup{upstreams: map[string]config.Upstream{"cfg1": cfg1, "cfg2": cfg2}}
 	fwd := NewStreamingForwarder()
-	log := logging.New(logging.Off, io.Discard)
+	log := logging.NewNopLogger()
 	h := NewHandler(authStore, resolver, lookup, fwd, log)
 
 	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"m"}`))
@@ -431,7 +431,7 @@ func TestFailover_FirstReturns429_FallbackSucceeds(t *testing.T) {
 	resolver := project.NewResolver(map[string]map[string][]string{"p1": {"m": {"cfg1", "cfg2"}}})
 	lookup := &configLookup{upstreams: map[string]config.Upstream{"cfg1": cfg1, "cfg2": cfg2}}
 	fwd := NewStreamingForwarder()
-	log := logging.New(logging.Off, io.Discard)
+	log := logging.NewNopLogger()
 	h := NewHandler(authStore, resolver, lookup, fwd, log)
 
 	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"m"}`))
@@ -473,7 +473,7 @@ func TestFailover_FirstReturns401_NoFailover(t *testing.T) {
 	resolver := project.NewResolver(map[string]map[string][]string{"p1": {"m": {"cfg1", "cfg2"}}})
 	lookup := &configLookup{upstreams: map[string]config.Upstream{"cfg1": cfg1, "cfg2": cfg2}}
 	fwd := NewStreamingForwarder()
-	log := logging.New(logging.Off, io.Discard)
+	log := logging.NewNopLogger()
 	h := NewHandler(authStore, resolver, lookup, fwd, log)
 
 	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"m"}`))

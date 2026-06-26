@@ -1,15 +1,22 @@
 package config
 
 import (
+	"log/slog"
 	"os"
 	"testing"
 	"time"
+
+	"github.com/cnstark/claude-switch/internal/logging"
 )
+
+func intPtr(v int) *int { return &v }
 
 func TestValidate_Success(t *testing.T) {
 	cfg := Config{
 		Server: Server{
-			Listen: "127.0.0.1:8787",
+			Listen:     "127.0.0.1:8787",
+			LogLevel:   LogInfo,
+			LogMaxDays: intPtr(7),
 			PrivateKeys: map[string]string{
 				"sk-cs-key1": "project1",
 			},
@@ -35,7 +42,7 @@ func TestValidate_Success(t *testing.T) {
 
 func TestValidate_DuplicateUpstreamName(t *testing.T) {
 	cfg := Config{
-		Server:    Server{Listen: "127.0.0.1:8787", PrivateKeys: map[string]string{"sk-cs-key1": "p1"}},
+		Server: Server{Listen: "127.0.0.1:8787", PrivateKeys: map[string]string{"sk-cs-key1": "p1"}},
 		Upstreams: []Upstream{
 			{Name: "cfg1", URL: "https://a.com", APIKey: "k1", Model: "m1", Timeout: 60 * time.Second},
 			{Name: "cfg1", URL: "https://b.com", APIKey: "k2", Model: "m2", Timeout: 30 * time.Second},
@@ -52,7 +59,7 @@ func TestValidate_DuplicateUpstreamName(t *testing.T) {
 
 func TestValidate_DanglingUpstreamRef(t *testing.T) {
 	cfg := Config{
-		Server:    Server{Listen: "127.0.0.1:8787", PrivateKeys: map[string]string{"sk-cs-key1": "p1"}},
+		Server: Server{Listen: "127.0.0.1:8787", PrivateKeys: map[string]string{"sk-cs-key1": "p1"}},
 		Upstreams: []Upstream{
 			{Name: "cfg1", URL: "https://a.com", APIKey: "k1", Model: "m1", Timeout: 60 * time.Second},
 		},
@@ -68,7 +75,7 @@ func TestValidate_DanglingUpstreamRef(t *testing.T) {
 
 func TestValidate_NoPrivateKeys(t *testing.T) {
 	cfg := Config{
-		Server:    Server{Listen: "127.0.0.1:8787"},
+		Server: Server{Listen: "127.0.0.1:8787"},
 		Upstreams: []Upstream{
 			{Name: "cfg1", URL: "https://a.com", APIKey: "k1", Model: "m1", Timeout: 60 * time.Second},
 		},
@@ -136,7 +143,7 @@ func TestValidate_DuplicateModelMapKey(t *testing.T) {
 
 func TestValidate_EmptyUpstreamName(t *testing.T) {
 	cfg := Config{
-		Server:    Server{Listen: "127.0.0.1:8787", PrivateKeys: map[string]string{"sk-cs-key1": "p1"}},
+		Server: Server{Listen: "127.0.0.1:8787", PrivateKeys: map[string]string{"sk-cs-key1": "p1"}},
 		Upstreams: []Upstream{
 			{Name: "", URL: "https://a.com", APIKey: "k1", Model: "m1", Timeout: 60 * time.Second},
 		},
@@ -269,7 +276,7 @@ projects:
 		t.Fatal(err)
 	}
 
-	w := NewWatcher(path, 50*time.Millisecond)
+	w := NewWatcher(path, 50*time.Millisecond, logging.NewStdErrLogger(slog.LevelWarn))
 	snap, err := w.Current()
 	if err != nil {
 		t.Fatalf("initial load failed: %v", err)
@@ -337,7 +344,7 @@ projects:
 `
 	os.WriteFile(path, []byte(validYAML), 0600)
 
-	w := NewWatcher(path, 50*time.Millisecond)
+	w := NewWatcher(path, 50*time.Millisecond, logging.NewStdErrLogger(slog.LevelWarn))
 	defer w.Stop()
 	_, err := w.Current()
 	if err != nil {
@@ -380,7 +387,7 @@ projects:
 `
 	os.WriteFile(path, []byte(validYAML), 0600)
 
-	w := NewWatcher(path, 50*time.Millisecond)
+	w := NewWatcher(path, 50*time.Millisecond, logging.NewStdErrLogger(slog.LevelWarn))
 	defer w.Stop()
 	snap := w.GetSnapshot()
 	if snap == nil {
@@ -435,7 +442,7 @@ projects:
 
 func TestValidate_RetryBackoff_Valid(t *testing.T) {
 	cfg := Config{
-		Server:    Server{Listen: "127.0.0.1:8787", PrivateKeys: map[string]string{"sk-cs-key1": "p1"}},
+		Server: Server{Listen: "127.0.0.1:8787", PrivateKeys: map[string]string{"sk-cs-key1": "p1"}},
 		Upstreams: []Upstream{
 			{Name: "cfg1", URL: "https://a.com", APIKey: "k1", Model: "m1", Timeout: 60 * time.Second,
 				RetryBackoff: []time.Duration{30 * time.Second, 2 * time.Minute, 5 * time.Minute, 15 * time.Minute}},
@@ -451,7 +458,7 @@ func TestValidate_RetryBackoff_Valid(t *testing.T) {
 
 func TestValidate_RetryBackoff_TooManyTiers(t *testing.T) {
 	cfg := Config{
-		Server:    Server{Listen: "127.0.0.1:8787", PrivateKeys: map[string]string{"sk-cs-key1": "p1"}},
+		Server: Server{Listen: "127.0.0.1:8787", PrivateKeys: map[string]string{"sk-cs-key1": "p1"}},
 		Upstreams: []Upstream{
 			{Name: "cfg1", URL: "https://a.com", APIKey: "k1", Model: "m1", Timeout: 60 * time.Second,
 				RetryBackoff: []time.Duration{1 * time.Second, 2 * time.Second, 3 * time.Second, 4 * time.Second, 5 * time.Second}},
@@ -467,7 +474,7 @@ func TestValidate_RetryBackoff_TooManyTiers(t *testing.T) {
 
 func TestValidate_RetryBackoff_NegativeDuration(t *testing.T) {
 	cfg := Config{
-		Server:    Server{Listen: "127.0.0.1:8787", PrivateKeys: map[string]string{"sk-cs-key1": "p1"}},
+		Server: Server{Listen: "127.0.0.1:8787", PrivateKeys: map[string]string{"sk-cs-key1": "p1"}},
 		Upstreams: []Upstream{
 			{Name: "cfg1", URL: "https://a.com", APIKey: "k1", Model: "m1", Timeout: 60 * time.Second,
 				RetryBackoff: []time.Duration{30 * time.Second, -1 * time.Second}},
@@ -587,5 +594,27 @@ func TestNewSnapshot_ProjectLogLevelDefaults(t *testing.T) {
 			t.Fatalf("inconsistency: snapshot.Projects[%q].LogLevel=%q != snapshot.Raw.Projects[%d].LogLevel=%q",
 				p.Name, snap.Projects[p.Name].LogLevel, i, p.LogLevel)
 		}
+	}
+}
+
+func TestValidate_ServerLogLevel_Invalid(t *testing.T) {
+	cfg := Config{
+		Server:    Server{Listen: "127.0.0.1:8787", LogLevel: "invalid", PrivateKeys: map[string]string{"sk-cs-key1": "p1"}},
+		Upstreams: []Upstream{{Name: "cfg1", URL: "https://a.com", APIKey: "k1", Model: "m1", Timeout: 60 * time.Second}},
+		Projects:  []Project{{Name: "p1", ModelMap: map[string][]string{"m": {"cfg1"}}}},
+	}
+	if err := Validate(cfg); err == nil {
+		t.Fatal("expected error for invalid server log_level")
+	}
+}
+
+func TestValidate_LogMaxDays_Negative(t *testing.T) {
+	cfg := Config{
+		Server:    Server{Listen: "127.0.0.1:8787", LogLevel: LogInfo, LogMaxDays: intPtr(-1), PrivateKeys: map[string]string{"sk-cs-key1": "p1"}},
+		Upstreams: []Upstream{{Name: "cfg1", URL: "https://a.com", APIKey: "k1", Model: "m1", Timeout: 60 * time.Second}},
+		Projects:  []Project{{Name: "p1", ModelMap: map[string][]string{"m": {"cfg1"}}}},
+	}
+	if err := Validate(cfg); err == nil {
+		t.Fatal("expected error for negative log_max_days")
 	}
 }

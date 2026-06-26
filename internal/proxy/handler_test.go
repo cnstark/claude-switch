@@ -10,7 +10,6 @@ import (
 	"github.com/cnstark/claude-switch/internal/project"
 	"github.com/cnstark/claude-switch/internal/upstream"
 	"github.com/cnstark/claude-switch/internal/usage"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -35,7 +34,7 @@ func setupTestHandler(keys map[string]string, projMap map[string]map[string][]st
 	resolver := project.NewResolver(projMap)
 	lookup := &configLookup{upstreams: upstreams}
 	fwd := upstream.NewClient()
-	log := logging.New(logging.Off, io.Discard)
+	log := logging.NewNopLogger()
 	return NewHandler(authStore, resolver, lookup, fwd, log)
 }
 
@@ -193,7 +192,7 @@ func TestHandler_Failover_CountsOnce(t *testing.T) {
 		resolver:     project.NewResolver(map[string]map[string][]string{"p1": {"m": {"cfg1", "cfg2"}}}),
 		lookup:       &configLookup{upstreams: map[string]config.Upstream{"cfg1": cfg1, "cfg2": cfg2}},
 		forwarder:    NewStreamingForwarder(),
-		log:          logging.New(logging.Off, io.Discard),
+		log:          logging.NewNopLogger(),
 		tracker:      rec,
 		usageEnabled: true,
 	}
@@ -238,7 +237,7 @@ func TestHandler_UsageDisabled_NoCollector(t *testing.T) {
 		resolver:     project.NewResolver(map[string]map[string][]string{"p1": {"m": {"cfg1"}}}),
 		lookup:       &configLookup{upstreams: map[string]config.Upstream{"cfg1": {Name: "cfg1", URL: ts.URL, APIKey: "k", Model: "m", Timeout: 5 * time.Second}}},
 		forwarder:    NewStreamingForwarder(),
-		log:          logging.New(logging.Off, io.Discard),
+		log:          logging.NewNopLogger(),
 		tracker:      rec,
 		usageEnabled: false,
 	}
@@ -266,7 +265,7 @@ func TestHandler_ErrorResponsePassthrough_NoCount(t *testing.T) {
 		resolver:     project.NewResolver(map[string]map[string][]string{"p1": {"m": {"cfg1"}}}),
 		lookup:       &configLookup{upstreams: map[string]config.Upstream{"cfg1": {Name: "cfg1", URL: ts.URL, APIKey: "k", Model: "m", Timeout: 5 * time.Second}}},
 		forwarder:    NewStreamingForwarder(),
-		log:          logging.New(logging.Off, io.Discard),
+		log:          logging.NewNopLogger(),
 		tracker:      rec,
 		usageEnabled: true,
 	}
@@ -318,7 +317,7 @@ projects:
 `, ts.URL)
 	os.WriteFile(configPath, []byte(cfgYAML), 0600)
 
-	watcher := config.NewWatcher(configPath, 50*time.Millisecond)
+	watcher := config.NewWatcher(configPath, 50*time.Millisecond, logging.NewNopLogger())
 	defer watcher.Stop()
 	tracker := usage.NewTracker(usagePath)
 	defer tracker.Close()
@@ -329,7 +328,7 @@ projects:
 	}
 	authStore := auth.NewStore(snap.Server.PrivateKeys)
 	fwd := NewStreamingForwarder()
-	handler := NewReloadingHandler(authStore, fwd, watcher, tracker, nil)
+	handler := NewReloadingHandler(authStore, fwd, watcher, tracker, nil, logging.NewNopLogger())
 
 	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"m"}`))
 	req.Header.Set("x-api-key", "sk-cs-key1")
@@ -408,7 +407,7 @@ func TestBreaker_BackoffSkipsUpstream(t *testing.T) {
 		resolver:  project.NewResolver(map[string]map[string][]string{"p1": {"m": {"cfg1", "cfg2"}}}),
 		lookup:    &configLookup{upstreams: map[string]config.Upstream{"cfg1": cfg1, "cfg2": cfg2}},
 		forwarder: NewStreamingForwarder(),
-		log:       logging.New(logging.Off, io.Discard),
+		log:       logging.NewNopLogger(),
 		breaker:   breaker,
 	}
 
@@ -463,7 +462,7 @@ func TestBreaker_SingleUpstream_ForcesProbe(t *testing.T) {
 		resolver:  project.NewResolver(map[string]map[string][]string{"p1": {"m": {"cfg1"}}}),
 		lookup:    &configLookup{upstreams: map[string]config.Upstream{"cfg1": cfg503}},
 		forwarder: NewStreamingForwarder(),
-		log:       logging.New(logging.Off, io.Discard),
+		log:       logging.NewNopLogger(),
 		breaker:   breaker,
 	}
 
@@ -490,7 +489,7 @@ func TestBreaker_SingleUpstream_ForcesProbe(t *testing.T) {
 		resolver:  project.NewResolver(map[string]map[string][]string{"p1": {"m": {"cfg1"}}}),
 		lookup:    &configLookup{upstreams: map[string]config.Upstream{"cfg1": cfg200}},
 		forwarder: NewStreamingForwarder(),
-		log:       logging.New(logging.Off, io.Discard),
+		log:       logging.NewNopLogger(),
 		breaker:   breaker,
 	}
 	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"m"}`))
@@ -524,7 +523,7 @@ func TestBreaker_NoBackoffUpstream_NotAffected(t *testing.T) {
 		resolver:  project.NewResolver(map[string]map[string][]string{"p1": {"m": {"cfg1"}}}),
 		lookup:    &configLookup{upstreams: map[string]config.Upstream{"cfg1": cfg1}},
 		forwarder: NewStreamingForwarder(),
-		log:       logging.New(logging.Off, io.Discard),
+		log:       logging.NewNopLogger(),
 		breaker:   breaker,
 	}
 
@@ -570,7 +569,7 @@ func TestBreaker_4xxNotCounted(t *testing.T) {
 		resolver:  project.NewResolver(map[string]map[string][]string{"p1": {"m": {"cfg1", "cfg2"}}}),
 		lookup:    &configLookup{upstreams: map[string]config.Upstream{"cfg1": cfg1, "cfg2": cfg2}},
 		forwarder: NewStreamingForwarder(),
-		log:       logging.New(logging.Off, io.Discard),
+		log:       logging.NewNopLogger(),
 		breaker:   breaker,
 	}
 
