@@ -139,13 +139,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// usage 收集器：仅当开关开启且 tracker 存在时创建（per-request）。
-	// 关闭时传 nil，Forward 走零开销直传路径。故障转移复用同一 collector：
-	// 连接失败的 cfg 不会 Attach（不计数），成功的 cfg 流结束时 Close 触发一次 Record。
-	var collector *usage.Collector
+	// 始终创建 collector：每个响应都解析 token 供 info 日志。
+	// 落盘 usage.json 仅在 usage_stats 开启时（rec 非 nil）。
+	var rec usage.Recorder
 	if h.usageEnabled && h.tracker != nil {
-		collector = usage.NewCollector(h.tracker, projectName, requestModel)
+		rec = h.tracker
 	}
+	collector := usage.NewCollector(rec, projectName, requestModel)
 
 	// 6. 依次尝试转发
 	allSkipped := true
@@ -189,11 +189,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		fwdErr := h.forwarder.Forward(cfg, rewrittenBody, reqHeaders, w, collector, h.log)
 		if fwdErr == nil {
-			h.log.InfoContext(r.Context(), "request forwarded",
-				"project", projectName,
-				"model", requestModel,
-				"upstream", cfgName,
-			)
+			attrs := append([]any{"project", projectName, "model", requestModel, "upstream", cfgName}, tokenAttrs(collector)...)
+			h.log.InfoContext(r.Context(), "request forwarded", attrs...)
 			// 记录成功
 			if h.breaker != nil {
 				if msg := h.breaker.RecordSuccess(cfgName); msg != "" {
@@ -248,11 +245,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 			fwdErr := h.forwarder.Forward(cfg, rewrittenBody, reqHeaders, w, collector, h.log)
 			if fwdErr == nil {
-				h.log.InfoContext(r.Context(), "forced probe succeeded",
-					"project", projectName,
-					"model", requestModel,
-					"upstream", cfgName,
-				)
+				attrs := append([]any{"project", projectName, "model", requestModel, "upstream", cfgName}, tokenAttrs(collector)...)
+				h.log.InfoContext(r.Context(), "forced probe succeeded", attrs...)
 				if msg := h.breaker.RecordSuccess(cfgName); msg != "" {
 					h.log.InfoContext(r.Context(), msg)
 				}
@@ -276,6 +270,22 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // rewriteRequestBody 替换 JSON 请求体中的 model 字段。
+// tokenAttrs 生成请求成功日志的 token 字段。解析到 usage 输出五类计数；否则输出 unknown 标记。
+func tokenAttrs(c *usage.Collector) []any {
+	if c == nil {
+		return []any{"tokens", "unknown"}
+	}
+	u, saw := c.Stats()
+	if !saw {
+		return []any{"tokens", "unknown"}
+	}
+	return []any{
+		"input", u.Input, "output", u.Output,
+		"cache_creation", u.CacheCreation, "cache_read", u.CacheRead,
+		"total", u.Input + u.Output + u.CacheCreation + u.CacheRead,
+	}
+}
+
 // 使用 json.Encoder + SetEscapeHTML(false)，避免把请求体里的 <、>、& 等
 // HTML 特殊字符转义成 < 等——这些字符在 Claude Code 的 system-reminder
 // 和工具描述里很常见，转义虽 JSON 语义等价，但会改变字节内容并可能触发某些

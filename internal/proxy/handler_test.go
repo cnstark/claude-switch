@@ -1,8 +1,10 @@
 package proxy
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"github.com/cnstark/claude-switch/internal/auth"
 	"github.com/cnstark/claude-switch/internal/circuitbreaker"
 	"github.com/cnstark/claude-switch/internal/config"
@@ -36,6 +38,11 @@ func setupTestHandler(keys map[string]string, projMap map[string]map[string][]st
 	fwd := upstream.NewClient()
 	log := logging.NewNopLogger()
 	return NewHandler(authStore, resolver, lookup, fwd, log)
+}
+
+// captureLogger 返回写入 buf 的 TextHandler logger（Info 级别），供断言请求日志字段。
+func captureLogger(buf *bytes.Buffer) *slog.Logger {
+	return slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
 }
 
 func TestHandler_AuthFailure_401(t *testing.T) {
@@ -215,38 +222,6 @@ func TestHandler_Failover_CountsOnce(t *testing.T) {
 	// 故障转移后 model 应为上游真实模型名（cfg2.Model="m2"），而非 model_map 的 key（"m"）
 	if rec.model != "m2" {
 		t.Fatalf("expected model recorded as upstream real model 'm2', got %q", rec.model)
-	}
-}
-
-func TestHandler_UsageDisabled_NoCollector(t *testing.T) {
-	// usage_stats 关闭 → 不注入 collector，零计数
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		flusher := w.(http.Flusher)
-		w.Header().Set("content-type", "text/event-stream")
-		w.WriteHeader(200)
-		w.Write([]byte("data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":42,\"output_tokens\":0}}}\n\n"))
-		flusher.Flush()
-		w.Write([]byte("data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":7}}\n\n"))
-		flusher.Flush()
-	}))
-	defer ts.Close()
-
-	rec := &usageFakeRecorder{}
-	h := &Handler{
-		auth:         auth.NewStore(map[string]string{"sk-cs-key1": "p1"}),
-		resolver:     project.NewResolver(map[string]map[string][]string{"p1": {"m": {"cfg1"}}}),
-		lookup:       &configLookup{upstreams: map[string]config.Upstream{"cfg1": {Name: "cfg1", URL: ts.URL, APIKey: "k", Model: "m", Timeout: 5 * time.Second}}},
-		forwarder:    NewStreamingForwarder(),
-		log:          logging.NewNopLogger(),
-		tracker:      rec,
-		usageEnabled: false,
-	}
-	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"m"}`))
-	req.Header.Set("x-api-key", "sk-cs-key1")
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, req)
-	if rec.calls != 0 {
-		t.Fatalf("expected no usage when disabled, got %d", rec.calls)
 	}
 }
 
@@ -607,5 +582,130 @@ func TestBreaker_4xxNotCounted(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code != 200 {
 		t.Fatalf("cfg1 should not be in backoff (4xx not counted), expected 200, got %d", rec.Code)
+	}
+}
+
+func TestHandler_Forwarded_LogsTokenFields(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		flusher := w.(http.Flusher)
+		w.Header().Set("content-type", "text/event-stream")
+		w.WriteHeader(200)
+		w.Write([]byte("data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":12500,\"cache_creation_input_tokens\":800,\"cache_read_input_tokens\":0,\"output_tokens\":0}}}\n\n"))
+		flusher.Flush()
+		w.Write([]byte("data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":3200}}\n\n"))
+		flusher.Flush()
+	}))
+	defer ts.Close()
+
+	rec := &usageFakeRecorder{}
+	var buf bytes.Buffer
+	h := &Handler{
+		auth:         auth.NewStore(map[string]string{"sk-cs-key1": "p1"}),
+		resolver:     project.NewResolver(map[string]map[string][]string{"p1": {"m": {"cfg1"}}}),
+		lookup:       &configLookup{upstreams: map[string]config.Upstream{"cfg1": {Name: "cfg1", URL: ts.URL, APIKey: "k", Model: "m", Timeout: 5 * time.Second}}},
+		forwarder:    NewStreamingForwarder(),
+		log:          captureLogger(&buf),
+		tracker:      rec,
+		usageEnabled: true,
+	}
+	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"m"}`))
+	req.Header.Set("x-api-key", "sk-cs-key1")
+	req.Header.Set("content-type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if rec.calls != 1 {
+		t.Fatalf("expected 1 persist call (usage_stats on), got %d", rec.calls)
+	}
+	out := buf.String()
+	for _, want := range []string{"input=12500", "output=3200", "cache_creation=800", "cache_read=0", "total=16500"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("log missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestHandler_UsageDisabled_LogsTokensWithoutPersisting(t *testing.T) {
+	// usage_stats 关：仍解析供日志（tokens 入日志），但不落盘（Record 不被调）。
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		flusher := w.(http.Flusher)
+		w.Header().Set("content-type", "text/event-stream")
+		w.WriteHeader(200)
+		w.Write([]byte("data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":42,\"output_tokens\":0}}}\n\n"))
+		flusher.Flush()
+		w.Write([]byte("data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":7}}\n\n"))
+		flusher.Flush()
+	}))
+	defer ts.Close()
+
+	rec := &usageFakeRecorder{}
+	var buf bytes.Buffer
+	h := &Handler{
+		auth:         auth.NewStore(map[string]string{"sk-cs-key1": "p1"}),
+		resolver:     project.NewResolver(map[string]map[string][]string{"p1": {"m": {"cfg1"}}}),
+		lookup:       &configLookup{upstreams: map[string]config.Upstream{"cfg1": {Name: "cfg1", URL: ts.URL, APIKey: "k", Model: "m", Timeout: 5 * time.Second}}},
+		forwarder:    NewStreamingForwarder(),
+		log:          captureLogger(&buf),
+		tracker:      rec,
+		usageEnabled: false,
+	}
+	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"m"}`))
+	req.Header.Set("x-api-key", "sk-cs-key1")
+	req.Header.Set("content-type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if rec.calls != 0 {
+		t.Fatalf("expected no persist when usage_stats off, got %d", rec.calls)
+	}
+	out := buf.String()
+	for _, want := range []string{"input=42", "output=7", "total=49"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("log missing %q (tokens should be logged even when usage_stats off):\n%s", want, out)
+		}
+	}
+}
+
+func TestHandler_NoUsage_LogsUnknownToken(t *testing.T) {
+	// 非 Anthropic 风格 2xx 响应无 usage → 日志应输出 tokens=unknown，且不落盘。
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		w.WriteHeader(200)
+		w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer ts.Close()
+
+	rec := &usageFakeRecorder{}
+	var buf bytes.Buffer
+	h := &Handler{
+		auth:         auth.NewStore(map[string]string{"sk-cs-key1": "p1"}),
+		resolver:     project.NewResolver(map[string]map[string][]string{"p1": {"m": {"cfg1"}}}),
+		lookup:       &configLookup{upstreams: map[string]config.Upstream{"cfg1": {Name: "cfg1", URL: ts.URL, APIKey: "k", Model: "m", Timeout: 5 * time.Second}}},
+		forwarder:    NewStreamingForwarder(),
+		log:          captureLogger(&buf),
+		tracker:      rec,
+		usageEnabled: true,
+	}
+	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"m"}`))
+	req.Header.Set("x-api-key", "sk-cs-key1")
+	req.Header.Set("content-type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "tokens=unknown") {
+		t.Fatalf("expected tokens=unknown in log, got:\n%s", out)
+	}
+	if rec.calls != 0 {
+		t.Fatalf("expected no persist for usage-less response, got %d", rec.calls)
 	}
 }
