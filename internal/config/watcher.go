@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -15,7 +16,7 @@ type Watcher struct {
 	snap     *ConfigSnapshot // 当前有效配置
 	mtime    time.Time
 	stopCh   chan struct{}
-	log      *slog.Logger
+	log      atomic.Pointer[slog.Logger] // 线程安全：poll goroutine 读、主 goroutine SetLogger 写
 }
 
 // NewWatcher 创建热重载监控器，启动后台轮询
@@ -24,8 +25,8 @@ func NewWatcher(path string, interval time.Duration, log *slog.Logger) *Watcher 
 		path:     path,
 		interval: interval,
 		stopCh:   make(chan struct{}),
-		log:      log,
 	}
+	w.log.Store(log)
 	// 初始加载
 	snap, err := LoadFile(path)
 	if err == nil {
@@ -35,6 +36,14 @@ func NewWatcher(path string, interval time.Duration, log *slog.Logger) *Watcher 
 	}
 	go w.loop()
 	return w
+}
+
+// SetLogger 热替换日志器（线程安全）。启动阶段传入 stderr-only bootLogger，
+// 双写 logger 构建后调用此方法切换，使后续重载失败日志同时落盘文件。
+func (w *Watcher) SetLogger(l *slog.Logger) {
+	if l != nil {
+		w.log.Store(l)
+	}
 }
 
 func (w *Watcher) loop() {
@@ -66,7 +75,7 @@ func (w *Watcher) checkAndReload() {
 	snap, err := LoadFile(w.path)
 	if err != nil {
 		// 重载失败，保留旧配置，输出警告
-		w.log.Warn("配置重载失败，保留旧配置", "error", err)
+		w.log.Load().Warn("配置重载失败，保留旧配置", "error", err)
 		return
 	}
 

@@ -81,6 +81,10 @@ func main() {
 	}
 	defer closer.Close() // 优雅退出时关闭轮转文件
 
+	// 将 watcher 的日志器从 stderr-only bootLogger 切换为双写 logger，
+	// 使后续配置重载失败等告警同时落盘文件。
+	watcher.SetLogger(logger)
+
 	// usage tracker：进程级单例，加载历史 usage.json 并启动后台刷盘。
 	// usage_stats 关闭时仍创建（保留历史数据、随时可热重载开启），仅不产生新记录。
 	usagePath := filepath.Join(filepath.Dir(configPath), "usage.json")
