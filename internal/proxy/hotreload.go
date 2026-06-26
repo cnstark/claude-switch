@@ -57,11 +57,18 @@ func (h *ReloadingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.authStore.Update(snap.Server.PrivateKeys)
 
 	// Build resolver from current snapshot
-	projData := make(map[string]map[string][]string, len(snap.Projects))
+	routes := make(map[string]project.ProjectRoute, len(snap.Projects))
 	for name, p := range snap.Projects {
-		projData[name] = p.ModelMap
+		routes[name] = project.ProjectRoute{
+			ModelMap:    p.ModelMap,
+			AllowDirect: p.AllowDirectAccess,
+		}
 	}
-	resolver := project.NewResolver(projData)
+	upstreamNames := make(map[string]bool, len(snap.Upstreams))
+	for name := range snap.Upstreams {
+		upstreamNames[name] = true
+	}
+	resolver := project.NewResolver(routes, upstreamNames)
 	lookup := &snapshotLookup{snap: snap}
 
 	// 生成 request_id：优先透传上游 x-request-id，fallback 自生成
