@@ -14,7 +14,8 @@ func NewStdErrLogger(level slog.Leveler) *slog.Logger {
 
 // NewLogger 创建双写 logger（文件 JSON + stderr Text）。
 // logFile 为空时使用 DefaultLogDir()/cs-proxy.log。
-func NewLogger(level slog.Leveler, logFile string, maxDays int) (*slog.Logger, error) {
+// 返回的 io.Closer 用于关闭底层轮转文件，调用方应在退出时 defer Close。
+func NewLogger(level slog.Leveler, logFile string, maxDays int) (*slog.Logger, io.Closer, error) {
 	if logFile == "" {
 		logFile = filepath.Join(DefaultLogDir(), "cs-proxy.log")
 	}
@@ -23,14 +24,14 @@ func NewLogger(level slog.Leveler, logFile string, maxDays int) (*slog.Logger, e
 
 	fileWriter, err := NewDailyRotateWriter(dir, baseName, maxDays)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	jsonHandler := slog.NewJSONHandler(fileWriter, &slog.HandlerOptions{Level: level})
 	textHandler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})
 	dualHandler := NewDualHandler(jsonHandler, textHandler)
 
-	return slog.New(dualHandler), nil
+	return slog.New(dualHandler), fileWriter, nil
 }
 
 // ParseLevel 将配置字符串转换为 slog.Level。无效值返回 defaultLevel。
@@ -61,14 +62,14 @@ func NewNopLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError + 1}))
 }
 
-// MaskKey 脱敏 API key：保留前 8 字符 + "..." + 后 4 字符（短 key 适配）。
+// MaskKey 脱敏 API key：保留前 8 字符 + "..." + 后 4 字符（长 key）。
+// 短 key（<=4）整段脱敏为 "..."，5–12 字符保留前 4。
+// 统一为各调用点（proxy/config）的脱敏实现，行为取各旧实现中"更严格"的版本，
+// 保证合并后不会比任一旧实现暴露更多 key 字符。
 func MaskKey(key string) string {
 	n := len(key)
-	if n == 0 {
-		return "..."
-	}
 	if n <= 4 {
-		return key[:1] + "..."
+		return "..."
 	}
 	if n <= 12 {
 		return key[:4] + "..."

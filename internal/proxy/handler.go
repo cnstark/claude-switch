@@ -12,6 +12,7 @@ import (
 
 	"github.com/cnstark/claude-switch/internal/circuitbreaker"
 	"github.com/cnstark/claude-switch/internal/config"
+	"github.com/cnstark/claude-switch/internal/logging"
 	"github.com/cnstark/claude-switch/internal/usage"
 )
 
@@ -77,12 +78,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	projectName, ok := h.auth.Authenticate(apiKey)
 	if !ok {
-		h.log.InfoContext(r.Context(), "auth failed", "key_prefix", maskKeyLog(apiKey))
+		h.log.InfoContext(r.Context(), "auth failed", "key_prefix", logging.MaskKey(apiKey))
 		writeError(w, http.StatusUnauthorized, "authentication_error", "无效的 API key")
 		return
 	}
 
-	// 鉴权成功后附加 project 到 logger
+	// 鉴权成功后附加 project 到 logger。
+	// 安全前提：Handler 由 ReloadingHandler.ServeHTTP 每请求新建，不跨请求共享；
+	// slog.With 返回新 logger 不修改原对象，此处重赋值不会引入数据竞争。
 	h.log = h.log.With("project", projectName)
 
 	// 2. 记录请求头（debug 级别，辅助排查上游兼容性问题）
@@ -314,16 +317,6 @@ func writeError(w http.ResponseWriter, statusCode int, errType, message string) 
 			"message": message,
 		},
 	})
-}
-
-func maskKeyLog(key string) string {
-	if len(key) <= 12 {
-		if len(key) > 4 {
-			return key[:4] + "..."
-		}
-		return "..."
-	}
-	return key[:8] + "..." + key[len(key)-4:]
 }
 
 // truncStr 截取字符串前 n 个字符用于日志，避免落盘过大

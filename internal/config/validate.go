@@ -3,6 +3,8 @@ package config
 import (
 	"fmt"
 	"strings"
+
+	"github.com/cnstark/claude-switch/internal/logging"
 )
 
 // Validate 校验 Config 的所有规则，返回第一个错误或 nil
@@ -40,11 +42,11 @@ func Validate(cfg Config) error {
 	seenKeys := make(map[string]bool)
 	for key, projName := range cfg.Server.PrivateKeys {
 		if seenKeys[key] {
-			return fmt.Errorf("server.private_keys: key %q 重复", maskKey(key))
+			return fmt.Errorf("server.private_keys: key %q 重复", logging.MaskKey(key))
 		}
 		seenKeys[key] = true
 		if !seenProject[projName] {
-			return fmt.Errorf("server.private_keys: key %q 指向不存在的项目 %q", maskKey(key), projName)
+			return fmt.Errorf("server.private_keys: key %q 指向不存在的项目 %q", logging.MaskKey(key), projName)
 		}
 	}
 
@@ -80,16 +82,16 @@ func Validate(cfg Config) error {
 		case "", LogOff, LogMeta, LogInfo, LogDebug:
 			// 合法
 		default:
-			return fmt.Errorf("projects.%s.log_level: 无效值 %q（允许: %s）", p.Name, p.LogLevel, strings.Join(validLogLevelsStr(), ", "))
+			return fmt.Errorf("projects.%s.log_level: 无效值 %q（允许: %s）", p.Name, p.LogLevel, strings.Join(validLogLevelsStr(true), ", "))
 		}
 	}
 
-	// 8. server.log_level 合法性
+	// 8. server.log_level 合法性（server 不支持 meta）
 	switch cfg.Server.LogLevel {
 	case "", LogOff, LogInfo, LogDebug:
 		// 合法
 	default:
-		return fmt.Errorf("server.log_level: 无效值 %q（允许: off, info, debug）", cfg.Server.LogLevel)
+		return fmt.Errorf("server.log_level: 无效值 %q（允许: %s）", cfg.Server.LogLevel, strings.Join(validLogLevelsStr(false), ", "))
 	}
 
 	// 9. server.log_max_days 范围（nil 已由 NewSnapshot 填充默认值，此处仅校验 >=0）
@@ -100,20 +102,13 @@ func Validate(cfg Config) error {
 	return nil
 }
 
-func validLogLevelsStr() []string {
-	return []string{string(LogOff), string(LogMeta), string(LogInfo), string(LogDebug)}
-}
-
-func maskKey(key string) string {
-	n := len(key)
-	if n == 0 {
-		return "..."
+// validLogLevelsStr 返回允许的日志级别字符串，用于校验错误信息。
+// includeMeta=true 时包含 meta（project 兼容旧配置），false 时排除（server 不支持 meta）。
+func validLogLevelsStr(includeMeta bool) []string {
+	levels := []string{string(LogOff)}
+	if includeMeta {
+		levels = append(levels, string(LogMeta))
 	}
-	if n <= 4 {
-		return key[:1] + "..."
-	}
-	if n <= 12 {
-		return key[:4] + "..."
-	}
-	return key[:8] + "..." + key[n-4:]
+	levels = append(levels, string(LogInfo), string(LogDebug))
+	return levels
 }

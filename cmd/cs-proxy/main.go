@@ -71,12 +71,15 @@ func main() {
 	}
 
 	// 创建请求链路 logger（双写：文件 JSON + stderr Text）
+	// 注意：log_level / log_file / log_max_days 仅在启动时读取，不支持热重载，
+	// 修改后需重启 cs-proxy 生效（与设计文档一致）。
 	serverLevel := logging.ParseLevel(string(snap.Server.LogLevel), slog.LevelInfo)
-	logger, err := logging.NewLogger(serverLevel, snap.Server.LogFile, *snap.Server.LogMaxDays)
+	logger, closer, err := logging.NewLogger(serverLevel, snap.Server.LogFile, *snap.Server.LogMaxDays)
 	if err != nil {
 		bootLogger.Error("创建日志文件失败", "error", err)
 		os.Exit(1)
 	}
+	defer closer.Close() // 优雅退出时关闭轮转文件
 
 	// usage tracker：进程级单例，加载历史 usage.json 并启动后台刷盘。
 	// usage_stats 关闭时仍创建（保留历史数据、随时可热重载开启），仅不产生新记录。

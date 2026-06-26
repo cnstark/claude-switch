@@ -2,7 +2,8 @@ package config
 
 import "time"
 
-// Server 代理服务器配置
+// Server 代理服务器配置。
+// LogLevel / LogFile / LogMaxDays 仅在启动时读取，不支持热重载，修改后需重启 cs-proxy 生效。
 type Server struct {
 	Listen      string            `yaml:"listen"`
 	LogLevel    LogLevel          `yaml:"log_level"`     // 守护进程日志级别，默认 info
