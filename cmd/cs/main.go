@@ -263,7 +263,7 @@ func main() {
 				return nil
 			}
 			for _, p := range cfg.Projects {
-				fmt.Printf("%-15s  log_level=%-5s  models=%d\n", p.Name, p.LogLevel, len(p.ModelMap))
+				fmt.Printf("%-15s  log_level=%-5s  models=%d  direct_access=%v\n", p.Name, p.LogLevel, len(p.ModelMap), p.AllowDirectAccess)
 			}
 			return nil
 		},
@@ -308,7 +308,46 @@ func main() {
 		},
 	}
 
-	projectCmd.AddCommand(projectAddCmd, projectListCmd, projectRemoveCmd)
+	projectDirectAccessCmd := &cobra.Command{
+		Use:   "direct-access <name> <on|off>",
+		Short: "开启或关闭项目的 allow_direct_access（用 upstream.name 直接访问）",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) < 2 {
+				return fmt.Errorf("用法: cs project direct-access <name> <on|off>")
+			}
+			name := args[0]
+			var enable bool
+			switch args[1] {
+			case "on":
+				enable = true
+			case "off":
+				enable = false
+			default:
+				return fmt.Errorf("参数必须是 on 或 off，当前 %q", args[1])
+			}
+			cfg, err := loadConfig()
+			if err != nil {
+				return err
+			}
+			found := false
+			for i, p := range cfg.Projects {
+				if p.Name == name {
+					found = true
+					cfg.Projects[i].AllowDirectAccess = enable
+					break
+				}
+			}
+			if !found {
+				return fmt.Errorf("项目 %q 不存在", name)
+			}
+			if err := config.Validate(cfg); err != nil {
+				return err
+			}
+			return config.Save(cfg, configPath)
+		},
+	}
+
+	projectCmd.AddCommand(projectAddCmd, projectListCmd, projectRemoveCmd, projectDirectAccessCmd)
 	rootCmd.AddCommand(projectCmd)
 
 	// === mapping ===
