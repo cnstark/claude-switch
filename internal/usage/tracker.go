@@ -194,7 +194,9 @@ func (c *Collector) Attach(contentType string) {
 	defer func() { recover() }() // usage 任何失败都不得中断转发
 	streaming := strings.Contains(contentType, "text/event-stream")
 	c.scanner = NewScanner(streaming, func(u TokenUsage) {
-		c.rec.Record(c.project, c.model, today(), u)
+		if c.rec != nil { // rec 为 nil（usage_stats 关或无 tracker）时只解析供日志，不落盘
+			c.rec.Record(c.project, c.model, today(), u)
+		}
 	})
 }
 

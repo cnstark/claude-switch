@@ -258,3 +258,19 @@ func TestCollector_Stats_NoAttach_SawFalse(t *testing.T) {
 		t.Fatal("expected saw=false when never attached")
 	}
 }
+
+func TestCollector_NilRecorder_ParsesWithoutPersisting(t *testing.T) {
+	// usage_stats 关闭场景：rec 为 nil，仍需解析供日志，但不落盘、不 panic。
+	c := NewCollector(nil, "p1", "modelA")
+	c.Attach("text/event-stream")
+	c.Feed([]byte("data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n"))
+	c.Feed([]byte("data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":4}}\n\n"))
+	c.Close() // 不应 panic
+	stats, saw := c.Stats()
+	if !saw {
+		t.Fatal("expected saw=true even with nil recorder (parse still happens)")
+	}
+	if stats.Input != 10 || stats.Output != 4 {
+		t.Fatalf("unexpected stats with nil recorder: %+v", stats)
+	}
+}
