@@ -1,14 +1,17 @@
 package proxy
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"github.com/cnstark/claude-switch/internal/auth"
 	"github.com/cnstark/claude-switch/internal/circuitbreaker"
 	"github.com/cnstark/claude-switch/internal/config"
-	"github.com/cnstark/claude-switch/internal/logging"
 	"github.com/cnstark/claude-switch/internal/project"
 	"github.com/cnstark/claude-switch/internal/usage"
+	"log/slog"
 	"net/http"
-	"os"
+	"strings"
+	"time"
 )
 
 // ReloadingHandler 每次请求从 watcher 获取最新配置快照的热重载 handler。
@@ -19,6 +22,7 @@ type ReloadingHandler struct {
 	watcher   *config.Watcher
 	tracker   usage.Recorder
 	breaker   *circuitbreaker.Breaker
+	log       *slog.Logger // 进程级 logger
 }
 
 // NewReloadingHandler 创建支持热重载的 handler。tracker 为进程级 usage 记录器。
@@ -28,6 +32,7 @@ func NewReloadingHandler(
 	watcher *config.Watcher,
 	tracker usage.Recorder,
 	breaker *circuitbreaker.Breaker,
+	log *slog.Logger,
 ) *ReloadingHandler {
 	return &ReloadingHandler{
 		authStore: authStore,
@@ -35,6 +40,7 @@ func NewReloadingHandler(
 		watcher:   watcher,
 		tracker:   tracker,
 		breaker:   breaker,
+		log:       log,
 	}
 }
 
@@ -51,32 +57,52 @@ func (h *ReloadingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Build resolver from current snapshot
 	projData := make(map[string]map[string][]string, len(snap.Projects))
-	projectLogLevels := make(map[string]config.LogLevel, len(snap.Projects))
 	for name, p := range snap.Projects {
 		projData[name] = p.ModelMap
-		projectLogLevels[name] = p.LogLevel
 	}
 	resolver := project.NewResolver(projData)
 	lookup := &snapshotLookup{snap: snap}
 
-	// 初始 logger 使用 Meta 级别，确保鉴权失败等关键事件被记录。
-	// 鉴权成功后 Handler 会根据请求所属 project 的 log_level 动态调整。
-	log := logging.New(logging.Meta, os.Stderr)
+	// 生成 request_id：优先透传上游 x-request-id，fallback 自生成
+	requestID := r.Header.Get("x-request-id")
+	if requestID == "" {
+		requestID = "cs-" + generateShortID()
+	}
+	reqLogger := h.log.With("request_id", requestID)
+
+	// 记录请求开始
+	reqLogger.LogAttrs(r.Context(), slog.LevelDebug, "request started",
+		slog.String("method", r.Method),
+		slog.String("path", r.URL.Path),
+	)
+
+	start := time.Now()
+	defer func() {
+		reqLogger.LogAttrs(r.Context(), slog.LevelDebug, "request completed",
+			slog.Int64("duration_ms", time.Since(start).Milliseconds()),
+		)
+	}()
 
 	// Build handler with current snapshot dependencies
 	handler := &Handler{
-		auth:             h.authStore,
-		resolver:         resolver,
-		lookup:           lookup,
-		forwarder:        h.forwarder,
-		log:              log,
-		tracker:          h.tracker,
-		usageEnabled:     snap.Server.UsageStats,
-		projectLogLevels: projectLogLevels,
-		breaker:          h.breaker,
+		auth:         h.authStore,
+		resolver:     resolver,
+		lookup:       lookup,
+		forwarder:    h.forwarder,
+		log:          reqLogger,
+		tracker:      h.tracker,
+		usageEnabled: snap.Server.UsageStats,
+		breaker:      h.breaker,
 	}
 
 	handler.ServeHTTP(w, r)
+}
+
+// generateShortID 生成 8 字符 base64 随机 ID
+func generateShortID() string {
+	b := make([]byte, 6)
+	rand.Read(b)
+	return strings.TrimRight(base64.URLEncoding.EncodeToString(b), "=")
 }
 
 // snapshotLookup implements ConfigLookup from snapshot
