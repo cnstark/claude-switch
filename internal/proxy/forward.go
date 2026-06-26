@@ -2,12 +2,14 @@ package proxy
 
 import (
 	"bytes"
+	"context"
 	"fmt"
-	"github.com/cnstark/claude-switch/internal/config"
-	"github.com/cnstark/claude-switch/internal/logging"
-	"github.com/cnstark/claude-switch/internal/usage"
 	"io"
+	"log/slog"
 	"net/http"
+
+	"github.com/cnstark/claude-switch/internal/config"
+	"github.com/cnstark/claude-switch/internal/usage"
 )
 
 // StreamingForwarder 流式转发器 — 逐 chunk flush SSE 响应
@@ -38,7 +40,7 @@ func (e *ResponseStartedError) Unwrap() error { return e.Err }
 // handler 据此不转移；连接阶段失败返回普通 error，handler 转移到下一个 cfg。
 // usage 语义：连接阶段失败（client.Do err）时 collector 未 Attach、不 Close → 不计数；
 // 成功流结束时 Close 触发一次 Record（仅当扫到 usage）。
-func (f *StreamingForwarder) Forward(cfg config.Upstream, body []byte, headers http.Header, w http.ResponseWriter, c *usage.Collector, log *logging.Logger) error {
+func (f *StreamingForwarder) Forward(cfg config.Upstream, body []byte, headers http.Header, w http.ResponseWriter, c *usage.Collector, log *slog.Logger) error {
 	req, err := http.NewRequest("POST", cfg.URL+"/v1/messages", bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("创建上游请求失败: %w", err)
@@ -60,12 +62,12 @@ func (f *StreamingForwarder) Forward(cfg config.Upstream, body []byte, headers h
 
 	// Debug: 记录上游响应状态码和关键响应头
 	if log != nil {
-		log.Debug("upstream response received", map[string]any{
-			"status_code":  resp.StatusCode,
-			"status":       resp.Status,
-			"content-type": resp.Header.Get("content-type"),
-			"content_len":  resp.Header.Get("content-length"),
-		})
+		log.DebugContext(context.Background(), "upstream response received",
+			"status_code", resp.StatusCode,
+			"status", resp.Status,
+			"content-type", resp.Header.Get("content-type"),
+			"content_len", resp.Header.Get("content-length"),
+		)
 	}
 
 	// 非 2xx 响应：判断是否可重试
@@ -75,18 +77,18 @@ func (f *StreamingForwarder) Forward(cfg config.Upstream, body []byte, headers h
 		errBody, readErr := io.ReadAll(resp.Body)
 		if readErr != nil {
 			if log != nil {
-				log.Debug("failed to read upstream error body", map[string]any{
-					"error": readErr.Error(),
-				})
+				log.DebugContext(context.Background(), "failed to read upstream error body",
+					"error", readErr.Error(),
+				)
 			}
 			return fmt.Errorf("读取上游错误响应体失败: %w", readErr)
 		}
 		if log != nil {
-			log.Debug("upstream error response body", map[string]any{
-				"body_len":  len(errBody),
-				"body_head": truncStr(string(errBody), 1024),
-				"body_tail": truncTail(string(errBody), 256),
-			})
+			log.DebugContext(context.Background(), "upstream error response body",
+				"body_len", len(errBody),
+				"body_head", truncStr(string(errBody), 1024),
+				"body_tail", truncTail(string(errBody), 256),
+			)
 		}
 
 		// 可重试：5xx 或 429，不向客户端写任何响应，直接返回错误让 handler 转移
