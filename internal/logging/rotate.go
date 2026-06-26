@@ -98,6 +98,10 @@ func (w *DailyRotateWriter) rotate(today string) error {
 }
 
 func (w *DailyRotateWriter) cleanup() {
+	// maxDays<=0 表示永久保留历史文件，不清理（rotate 也会跳过调用，此处为防御性短路）。
+	if w.maxDays <= 0 {
+		return
+	}
 	entries, err := os.ReadDir(w.dir)
 	if err != nil {
 		return
