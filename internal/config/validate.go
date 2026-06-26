@@ -74,21 +74,34 @@ func Validate(cfg Config) error {
 		}
 	}
 
-	// 7. log_level 合法性
+	// 7. project.log_level 合法性（meta 兼容旧配置，info 为新值）
 	for _, p := range cfg.Projects {
 		switch p.LogLevel {
-		case "", LogOff, LogMeta, LogDebug:
+		case "", LogOff, LogMeta, LogInfo, LogDebug:
 			// 合法
 		default:
 			return fmt.Errorf("projects.%s.log_level: 无效值 %q（允许: %s）", p.Name, p.LogLevel, strings.Join(validLogLevelsStr(), ", "))
 		}
 	}
 
+	// 8. server.log_level 合法性
+	switch cfg.Server.LogLevel {
+	case "", LogOff, LogInfo, LogDebug:
+		// 合法
+	default:
+		return fmt.Errorf("server.log_level: 无效值 %q（允许: off, info, debug）", cfg.Server.LogLevel)
+	}
+
+	// 9. server.log_max_days 范围（nil 已由 NewSnapshot 填充默认值，此处仅校验 >=0）
+	if cfg.Server.LogMaxDays != nil && *cfg.Server.LogMaxDays < 0 {
+		return fmt.Errorf("server.log_max_days: 不能为负数，当前 %d", *cfg.Server.LogMaxDays)
+	}
+
 	return nil
 }
 
 func validLogLevelsStr() []string {
-	return []string{string(LogOff), string(LogMeta), string(LogDebug)}
+	return []string{string(LogOff), string(LogMeta), string(LogInfo), string(LogDebug)}
 }
 
 func maskKey(key string) string {

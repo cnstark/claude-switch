@@ -20,12 +20,6 @@ func Load(data []byte) (ConfigSnapshot, error) {
 	if err := Validate(cfg); err != nil {
 		return ConfigSnapshot{}, fmt.Errorf("配置校验失败: %w", err)
 	}
-	// 填充默认值
-	for i := range cfg.Projects {
-		if cfg.Projects[i].LogLevel == "" {
-			cfg.Projects[i].LogLevel = LogOff
-		}
-	}
 	return NewSnapshot(cfg), nil
 }
 
@@ -121,6 +115,9 @@ func defaultConfigContent(privateKey string) string {
 
 server:
   listen: 127.0.0.1:8787
+  log_level: info
+  # log_file: ""            # 自定义日志路径，空=默认 ~/.claude_switch/logs/cs-proxy.log
+  # log_max_days: 7         # 日志保留天数，0=永久保留
   # 私有 key → 项目名 映射（已自动生成一个 key，也可用 cs key gen 生成新的）
   private_keys:
     %s: default

@@ -549,3 +549,43 @@ projects:
 		t.Fatalf("expected empty retry_backoff by default, got %d", len(cfg1.RetryBackoff))
 	}
 }
+
+func TestNewSnapshot_ProjectLogLevelDefaults(t *testing.T) {
+	// 回归测试：确保 NewSnapshot 的 ps map 构建在 project 默认值应用之后，
+	// 使得 snapshot.Projects[name].LogLevel 与 snapshot.Raw.Projects[i].LogLevel 一致。
+	cfg := Config{
+		Server: Server{
+			Listen: "127.0.0.1:8787",
+			PrivateKeys: map[string]string{
+				"sk-cs-key1": "p1",
+				"sk-cs-key2": "p2",
+			},
+		},
+		Upstreams: []Upstream{
+			{Name: "cfg1", URL: "https://a.com", APIKey: "k1", Model: "m1", Timeout: 60 * time.Second},
+		},
+		Projects: []Project{
+			{Name: "p1", LogLevel: LogMeta, ModelMap: map[string][]string{"modelA": {"cfg1"}}},
+			{Name: "p2", LogLevel: "", ModelMap: map[string][]string{"modelA": {"cfg1"}}},
+		},
+	}
+
+	snap := NewSnapshot(cfg)
+
+	// meta 应被映射为 info
+	if snap.Projects["p1"].LogLevel != LogInfo {
+		t.Fatalf("expected p1.LogLevel=%q (meta→info), got %q", LogInfo, snap.Projects["p1"].LogLevel)
+	}
+	// 空值应被填充为 off
+	if snap.Projects["p2"].LogLevel != LogOff {
+		t.Fatalf("expected p2.LogLevel=%q (default off), got %q", LogOff, snap.Projects["p2"].LogLevel)
+	}
+
+	// 验证一致性：snapshot.Projects 与 snapshot.Raw.Projects 的值一致
+	for i, p := range snap.Raw.Projects {
+		if snap.Projects[p.Name].LogLevel != p.LogLevel {
+			t.Fatalf("inconsistency: snapshot.Projects[%q].LogLevel=%q != snapshot.Raw.Projects[%d].LogLevel=%q",
+				p.Name, snap.Projects[p.Name].LogLevel, i, p.LogLevel)
+		}
+	}
+}

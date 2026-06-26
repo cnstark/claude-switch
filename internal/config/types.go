@@ -5,6 +5,9 @@ import "time"
 // Server 代理服务器配置
 type Server struct {
 	Listen      string            `yaml:"listen"`
+	LogLevel    LogLevel          `yaml:"log_level"`     // 守护进程日志级别，默认 info
+	LogFile     string            `yaml:"log_file"`      // 自定义日志文件路径，空=默认路径
+	LogMaxDays  *int              `yaml:"log_max_days"`  // 日志保留天数，nil=默认7，0=永久保留
 	UsageStats  bool              `yaml:"usage_stats"`
 	PrivateKeys map[string]string `yaml:"private_keys"` // key → project name
 }
@@ -25,6 +28,7 @@ type LogLevel string
 const (
 	LogOff   LogLevel = "off"
 	LogMeta  LogLevel = "meta"
+	LogInfo  LogLevel = "info"
 	LogDebug LogLevel = "debug"
 )
 
@@ -56,6 +60,16 @@ func NewSnapshot(cfg Config) ConfigSnapshot {
 	for _, u := range cfg.Upstreams {
 		us[u.Name] = u
 	}
+	// project.log_level 默认值 + meta→info 映射（必须在构建 ps map 之前，否则 ps 中的值不一致）
+	for i := range cfg.Projects {
+		if cfg.Projects[i].LogLevel == "" {
+			cfg.Projects[i].LogLevel = LogOff
+		}
+		// 向后兼容：meta 映射为 info
+		if cfg.Projects[i].LogLevel == LogMeta {
+			cfg.Projects[i].LogLevel = LogInfo
+		}
+	}
 	ps := make(map[string]Project, len(cfg.Projects))
 	for _, p := range cfg.Projects {
 		ps[p.Name] = p
@@ -63,6 +77,15 @@ func NewSnapshot(cfg Config) ConfigSnapshot {
 	// 默认 listen
 	if cfg.Server.Listen == "" {
 		cfg.Server.Listen = "127.0.0.1:8787"
+	}
+	// 默认 log_level
+	if cfg.Server.LogLevel == "" {
+		cfg.Server.LogLevel = LogInfo
+	}
+	// 默认 log_max_days（nil = 未设置 → 7；0 = 用户显式设为永久）
+	if cfg.Server.LogMaxDays == nil {
+		d := 7
+		cfg.Server.LogMaxDays = &d
 	}
 	return ConfigSnapshot{
 		Server:    cfg.Server,
