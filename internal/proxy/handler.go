@@ -5,13 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/cnstark/claude-switch/internal/circuitbreaker"
-	"github.com/cnstark/claude-switch/internal/config"
-	"github.com/cnstark/claude-switch/internal/logging"
-	"github.com/cnstark/claude-switch/internal/usage"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
+
+	"github.com/cnstark/claude-switch/internal/circuitbreaker"
+	"github.com/cnstark/claude-switch/internal/config"
+	"github.com/cnstark/claude-switch/internal/usage"
 )
 
 // AuthStore 鉴权接口
@@ -31,24 +32,23 @@ type ConfigLookup interface {
 
 // Forwarder 上游转发接口
 type Forwarder interface {
-	Forward(cfg config.Upstream, body []byte, headers http.Header, w http.ResponseWriter, c *usage.Collector, log *logging.Logger) error
+	Forward(cfg config.Upstream, body []byte, headers http.Header, w http.ResponseWriter, c *usage.Collector, log *slog.Logger) error
 }
 
 // Handler 代理 HTTP handler
 type Handler struct {
-	auth             AuthStore
-	resolver         ModelResolver
-	lookup           ConfigLookup
-	forwarder        Forwarder
-	log              *logging.Logger
-	tracker          usage.Recorder // nil = usage 关闭
-	usageEnabled     bool           // 来自 per-request snapshot.Server.UsageStats
-	projectLogLevels map[string]config.LogLevel
-	breaker          *circuitbreaker.Breaker // nil = 不启用熔断
+	auth         AuthStore
+	resolver     ModelResolver
+	lookup       ConfigLookup
+	forwarder    Forwarder
+	log          *slog.Logger
+	tracker      usage.Recorder          // nil = usage 关闭
+	usageEnabled bool                    // 来自 per-request snapshot.Server.UsageStats
+	breaker      *circuitbreaker.Breaker // nil = 不启用熔断
 }
 
 // NewHandler 创建代理 handler
-func NewHandler(auth AuthStore, resolver ModelResolver, lookup ConfigLookup, forwarder Forwarder, log *logging.Logger) *Handler {
+func NewHandler(auth AuthStore, resolver ModelResolver, lookup ConfigLookup, forwarder Forwarder, log *slog.Logger) *Handler {
 	return &Handler{
 		auth:      auth,
 		resolver:  resolver,
@@ -63,7 +63,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// recover panic
 	defer func() {
 		if rec := recover(); rec != nil {
-			h.log.Info("handler panic recovered", map[string]any{"panic": fmt.Sprintf("%v", rec)})
+			h.log.InfoContext(r.Context(), "handler panic recovered", "panic", fmt.Sprintf("%v", rec))
 			writeError(w, http.StatusInternalServerError, "internal_error", "内部服务错误")
 		}
 	}()
@@ -77,22 +77,22 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	projectName, ok := h.auth.Authenticate(apiKey)
 	if !ok {
-		h.log.Info("auth failed", map[string]any{"key_prefix": maskKeyLog(apiKey)})
+		h.log.InfoContext(r.Context(), "auth failed", "key_prefix", maskKeyLog(apiKey))
 		writeError(w, http.StatusUnauthorized, "authentication_error", "无效的 API key")
 		return
 	}
 
-	// 根据请求所属 project 设置日志级别（每个 project 可独立配置 log_level）
-	h.log.SetLevel(logLevelForProject(projectName, h.projectLogLevels))
+	// 鉴权成功后附加 project 到 logger
+	h.log = h.log.With("project", projectName)
 
 	// 2. 记录请求头（debug 级别，辅助排查上游兼容性问题）
-	h.log.Debug("request headers", map[string]any{
-		"content_type":   r.Header.Get("content-type"),
-		"accept":         r.Header.Get("accept"),
-		"user_agent":     r.Header.Get("user-agent"),
-		"anthropic_ver":  r.Header.Get("anthropic-version"),
-		"content_length": r.Header.Get("content-length"),
-	})
+	h.log.DebugContext(r.Context(), "request headers",
+		"content_type", r.Header.Get("content-type"),
+		"accept", r.Header.Get("accept"),
+		"user_agent", r.Header.Get("user-agent"),
+		"anthropic_ver", r.Header.Get("anthropic-version"),
+		"content_length", r.Header.Get("content-length"),
+	)
 
 	// 3. 读取请求体
 	body, err := io.ReadAll(r.Body)
@@ -100,21 +100,21 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request_error", "无法读取请求体")
 		return
 	}
-	h.log.Debug("request body received", map[string]any{
-		"body_len":      len(body),
-		"content_type":  r.Header.Get("content-type"),
-		"raw_body_head": truncStr(string(body), 512),
-	})
+	h.log.DebugContext(r.Context(), "request body received",
+		"body_len", len(body),
+		"content_type", r.Header.Get("content-type"),
+		"raw_body_head", truncStr(string(body), 512),
+	)
 
 	// 4. 解析 model
 	var reqBody map[string]any
 	if err := json.Unmarshal(body, &reqBody); err != nil {
-		h.log.Debug("request body json parse failed", map[string]any{
-			"error":     err.Error(),
-			"body_head": truncStr(string(body), 512),
-			"body_len":  len(body),
-			"body_tail": truncTail(string(body), 128),
-		})
+		h.log.DebugContext(r.Context(), "request body json parse failed",
+			"error", err.Error(),
+			"body_head", truncStr(string(body), 512),
+			"body_len", len(body),
+			"body_tail", truncTail(string(body), 128),
+		)
 		writeError(w, http.StatusBadRequest, "invalid_request_error", "请求体 JSON 解析失败")
 		return
 	}
@@ -127,10 +127,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// 5. 路由查表
 	cfgNames, ok := h.resolver.Resolve(projectName, requestModel)
 	if !ok {
-		h.log.Info("model not found", map[string]any{
-			"project": projectName,
-			"model":   requestModel,
-		})
+		h.log.InfoContext(r.Context(), "model not found",
+			"project", projectName,
+			"model", requestModel,
+		)
 		writeError(w, http.StatusNotFound, "not_found_error",
 			fmt.Sprintf("项目 %q 未配置模型 %q 的映射", projectName, requestModel))
 		return
@@ -155,10 +155,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// 检查熔断器
 		if h.breaker != nil {
 			if avail, reason := h.breaker.IsAvailable(cfgName, cfg.RetryBackoff); !avail {
-				h.log.Info("circuit breaker skipped", map[string]any{
-					"upstream": cfgName,
-					"reason":   reason,
-				})
+				h.log.InfoContext(r.Context(), "circuit breaker skipped",
+					"upstream", cfgName,
+					"reason", reason,
+				)
 				continue
 			}
 		}
@@ -170,31 +170,31 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		rewrittenBody, err := rewriteRequestBody(body, cfg.Model)
 		if err != nil {
-			h.log.Info("rewrite failed", map[string]any{"error": err.Error()})
+			h.log.InfoContext(r.Context(), "rewrite failed", "error", err.Error())
 			writeError(w, http.StatusInternalServerError, "internal_error", "请求重写失败")
 			return
 		}
-		h.log.Debug("forwarding to upstream", map[string]any{
-			"upstream":            cfgName,
-			"upstream_url":        cfg.URL,
-			"rewritten_body_len":  len(rewrittenBody),
-			"rewritten_body_head": truncStr(string(rewrittenBody), 512),
-			"rewritten_body_tail": truncTail(string(rewrittenBody), 128),
-		})
+		h.log.DebugContext(r.Context(), "forwarding to upstream",
+			"upstream", cfgName,
+			"upstream_url", cfg.URL,
+			"rewritten_body_len", len(rewrittenBody),
+			"rewritten_body_head", truncStr(string(rewrittenBody), 512),
+			"rewritten_body_tail", truncTail(string(rewrittenBody), 128),
+		)
 		reqHeaders := r.Header.Clone()
 		rewriteHeaders(reqHeaders, cfg.APIKey)
 
 		fwdErr := h.forwarder.Forward(cfg, rewrittenBody, reqHeaders, w, collector, h.log)
 		if fwdErr == nil {
-			h.log.Info("request forwarded", map[string]any{
-				"project":  projectName,
-				"model":    requestModel,
-				"upstream": cfgName,
-			})
+			h.log.InfoContext(r.Context(), "request forwarded",
+				"project", projectName,
+				"model", requestModel,
+				"upstream", cfgName,
+			)
 			// 记录成功
 			if h.breaker != nil {
 				if msg := h.breaker.RecordSuccess(cfgName); msg != "" {
-					h.log.Info(msg, nil)
+					h.log.InfoContext(r.Context(), msg)
 				}
 			}
 			return
@@ -204,21 +204,21 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// 此时也无法再向客户端写错误响应，只能记日志后终止。
 		var startedErr *ResponseStartedError
 		if errors.As(fwdErr, &startedErr) {
-			h.log.Info("upstream failed after response started, aborting failover", map[string]any{
-				"upstream": cfgName,
-				"error":    startedErr.Err.Error(),
-			})
+			h.log.InfoContext(r.Context(), "upstream failed after response started, aborting failover",
+				"upstream", cfgName,
+				"error", startedErr.Err.Error(),
+			)
 			return
 		}
-		h.log.Info("upstream failed, trying next", map[string]any{
-			"upstream": cfgName,
-			"error":    fwdErr.Error(),
-		})
+		h.log.InfoContext(r.Context(), "upstream failed, trying next",
+			"upstream", cfgName,
+			"error", fwdErr.Error(),
+		)
 
 		// 记录失败（可重试错误）
 		if h.breaker != nil {
 			if msg := h.breaker.RecordFailure(cfgName, cfg.RetryBackoff); msg != "" {
-				h.log.Info(msg, nil)
+				h.log.InfoContext(r.Context(), msg)
 			}
 		}
 	}
@@ -228,9 +228,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		cfgName := cfgNames[0]
 		cfg, ok := h.lookup.Upstream(cfgName)
 		if ok {
-			h.log.Info("all upstreams in backoff, forcing probe", map[string]any{
-				"upstream": cfgName,
-			})
+			h.log.InfoContext(r.Context(), "all upstreams in backoff, forcing probe",
+				"upstream", cfgName,
+			)
 
 			if collector != nil {
 				collector.SetModel(cfg.Model)
@@ -245,52 +245,31 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 			fwdErr := h.forwarder.Forward(cfg, rewrittenBody, reqHeaders, w, collector, h.log)
 			if fwdErr == nil {
-				h.log.Info("forced probe succeeded", map[string]any{
-					"project":  projectName,
-					"model":    requestModel,
-					"upstream": cfgName,
-				})
+				h.log.InfoContext(r.Context(), "forced probe succeeded",
+					"project", projectName,
+					"model", requestModel,
+					"upstream", cfgName,
+				)
 				if msg := h.breaker.RecordSuccess(cfgName); msg != "" {
-					h.log.Info(msg, nil)
+					h.log.InfoContext(r.Context(), msg)
 				}
 				return
 			}
 			var startedErr *ResponseStartedError
 			if !errors.As(fwdErr, &startedErr) {
 				if msg := h.breaker.RecordFailure(cfgName, cfg.RetryBackoff); msg != "" {
-					h.log.Info(msg, nil)
+					h.log.InfoContext(r.Context(), msg)
 				}
 			}
 		}
 	}
 
 	// 全部失败
-	h.log.Info("all upstreams failed", map[string]any{
-		"project": projectName,
-		"model":   requestModel,
-	})
+	h.log.InfoContext(r.Context(), "all upstreams failed",
+		"project", projectName,
+		"model", requestModel,
+	)
 	writeError(w, http.StatusBadGateway, "upstream_error", "所有上游均不可用")
-}
-
-// logLevelForProject 根据 project 名查找对应的日志级别，未找到时默认 Meta。
-func logLevelForProject(projectName string, levels map[string]config.LogLevel) logging.Level {
-	if levels == nil {
-		return logging.Meta
-	}
-	ll, ok := levels[projectName]
-	if !ok {
-		return logging.Meta
-	}
-	switch ll {
-	case config.LogDebug:
-		return logging.Debug
-	case config.LogMeta:
-		return logging.Meta
-	case config.LogOff:
-		return logging.Off
-	default:
-		return logging.Meta
-	}
 }
 
 // rewriteRequestBody 替换 JSON 请求体中的 model 字段。
