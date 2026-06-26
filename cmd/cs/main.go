@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/cnstark/claude-switch/internal/config"
+	"github.com/cnstark/claude-switch/internal/logging"
 	"github.com/cnstark/claude-switch/internal/usage"
 	"os"
 	"path/filepath"
@@ -231,7 +232,7 @@ func main() {
 				cfg.Server.PrivateKeys = make(map[string]string)
 			}
 			if _, exists := cfg.Server.PrivateKeys[key]; exists {
-				return fmt.Errorf("私有 key 已被使用: %s", maskKey(key))
+				return fmt.Errorf("私有 key 已被使用: %s", logging.MaskKey(key))
 			}
 			cfg.Server.PrivateKeys[key] = name
 			cfg.Projects = append(cfg.Projects, config.Project{
@@ -616,17 +617,6 @@ func loadConfig() (config.Config, error) {
 		return config.Config{}, fmt.Errorf("加载配置失败: %w", err)
 	}
 	return snap.Raw, nil
-}
-
-func maskKey(key string) string {
-	n := len(key)
-	if n <= 12 {
-		if n > 4 {
-			return key[:4] + "..."
-		}
-		return "..."
-	}
-	return key[:8] + "..." + key[n-4:]
 }
 
 func getPIDFilePath() string {
