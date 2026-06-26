@@ -224,3 +224,37 @@ func TestCollector_NoAttach_NoCommit(t *testing.T) {
 		t.Fatal("must not commit when never attached")
 	}
 }
+
+func TestCollector_Stats_AfterParsedStream(t *testing.T) {
+	rec := fakeRecorder{}
+	c := NewCollector(&rec, "p1", "modelA")
+	c.Attach("text/event-stream")
+	c.Feed([]byte("data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":10,\"cache_creation_input_tokens\":2,\"output_tokens\":0}}}\n\n"))
+	c.Feed([]byte("data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":4}}\n\n"))
+	c.Close()
+	stats, saw := c.Stats()
+	if !saw {
+		t.Fatal("expected saw=true after usage stream")
+	}
+	if stats.Input != 10 || stats.Output != 4 || stats.CacheCreation != 2 || stats.CacheRead != 0 {
+		t.Fatalf("unexpected stats: %+v", stats)
+	}
+}
+
+func TestCollector_Stats_NoUsage_SawFalse(t *testing.T) {
+	c := NewCollector(&fakeRecorder{}, "p1", "modelA")
+	c.Attach("text/event-stream")
+	c.Feed([]byte("event: error\ndata: {\"type\":\"error\",\"error\":{\"message\":\"x\"}}\n\n"))
+	c.Close()
+	if _, saw := c.Stats(); saw {
+		t.Fatal("expected saw=false when stream has no usage")
+	}
+}
+
+func TestCollector_Stats_NoAttach_SawFalse(t *testing.T) {
+	c := NewCollector(&fakeRecorder{}, "p1", "modelA")
+	// 未 Attach（连接阶段失败场景）：Stats 不应 panic，返回 false
+	if _, saw := c.Stats(); saw {
+		t.Fatal("expected saw=false when never attached")
+	}
+}

@@ -214,6 +214,15 @@ func (c *Collector) Close() {
 	}
 }
 
+// Stats 返回本请求累计的 token 用量及是否观测到 usage 事件。
+// 在 Close 之后（即 Forward 返回后）调用，值为最终值。未 Attach 时返回 false。
+func (c *Collector) Stats() (TokenUsage, bool) {
+	if c.scanner == nil {
+		return TokenUsage{}, false
+	}
+	return c.scanner.usage, c.scanner.sawStart
+}
+
 func today() string {
 	return time.Now().Format("2006-01-02")
 }
