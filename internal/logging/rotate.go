@@ -75,9 +75,12 @@ func (w *DailyRotateWriter) openFile() error {
 }
 
 func (w *DailyRotateWriter) rotate(today string) error {
-	// 关闭当前文件
+	// 关闭当前文件。失败仅输出 stderr 通知，不中止轮转（openFile 用 O_CREATE|O_APPEND 无 O_TRUNC，
+	// 即便重命名失败也会以追加模式重开基础文件，不会丢数据）。
 	if w.file != nil {
-		w.file.Close()
+		if err := w.file.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "cs-proxy: 日志轮转关闭旧文件失败: %v\n", err)
+		}
 	}
 
 	// 将当天文件重命名为带日期的历史文件
@@ -85,7 +88,9 @@ func (w *DailyRotateWriter) rotate(today string) error {
 	datedName := strings.TrimSuffix(w.baseName, ".log") + "-" + w.curDate + ".log"
 	datedPath := filepath.Join(w.dir, datedName)
 	if _, err := os.Stat(curPath); err == nil {
-		os.Rename(curPath, datedPath)
+		if err := os.Rename(curPath, datedPath); err != nil {
+			fmt.Fprintf(os.Stderr, "cs-proxy: 日志轮转重命名失败: %v\n", err)
+		}
 	}
 
 	// 清理过期文件
@@ -104,8 +109,11 @@ func (w *DailyRotateWriter) cleanup() {
 	}
 	entries, err := os.ReadDir(w.dir)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "cs-proxy: 日志清理读取目录失败: %v\n", err)
 		return
 	}
+	// 日期文件名使用本地日期（curDate = time.Now().Format），故 fileDate 也按本地时区解析，
+	// 与 cutoff（同样本地）保持一致，避免非 UTC 时区下的跨天越界。
 	cutoff := time.Now().AddDate(0, 0, -w.maxDays)
 	prefix := strings.TrimSuffix(w.baseName, ".log") + "-"
 	for _, entry := range entries {
@@ -118,12 +126,14 @@ func (w *DailyRotateWriter) cleanup() {
 		}
 		dateStr := strings.TrimPrefix(name, prefix)
 		dateStr = strings.TrimSuffix(dateStr, ".log")
-		fileDate, err := time.Parse("2006-01-02", dateStr)
+		fileDate, err := time.ParseInLocation("2006-01-02", dateStr, time.Local)
 		if err != nil {
 			continue
 		}
 		if fileDate.Before(cutoff) {
-			os.Remove(filepath.Join(w.dir, name))
+			if err := os.Remove(filepath.Join(w.dir, name)); err != nil {
+				fmt.Fprintf(os.Stderr, "cs-proxy: 日志清理删除文件失败 %s: %v\n", name, err)
+			}
 		}
 	}
 }
