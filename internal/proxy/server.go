@@ -1,9 +1,10 @@
 package proxy
 
 import (
-	"github.com/cnstark/claude-switch/internal/config"
 	"context"
 	"fmt"
+	"github.com/cnstark/claude-switch/internal/config"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -11,32 +12,31 @@ import (
 	"time"
 )
 
-// Server 代理服务器
 type Server struct {
 	httpServer *http.Server
 	watcher    *config.Watcher
+	log        *slog.Logger
 }
 
-// NewServer 创建代理服务器
-func NewServer(watcher *config.Watcher, handler http.Handler) *Server {
+func NewServer(watcher *config.Watcher, handler http.Handler, log *slog.Logger) *Server {
 	return &Server{
-		httpServer: &http.Server{
-			Handler: handler,
-		},
-		watcher: watcher,
+		httpServer: &http.Server{Handler: handler},
+		watcher:    watcher,
+		log:        log,
 	}
 }
 
-// Start 启动服务器并等待优雅退出
 func (s *Server) Start(listenAddr string) error {
 	s.httpServer.Addr = listenAddr
-	fmt.Fprintf(os.Stderr, "[cs-proxy] 监听 %s\n", listenAddr)
+	s.log.Info("cs-proxy 启动", "listen_addr", listenAddr)
 
 	snap, err := s.watcher.Current()
 	if err == nil {
-		fmt.Fprintf(os.Stderr, "[cs-proxy] 已加载 %d 个 upstream, %d 个 project\n",
-			len(snap.Upstreams), len(snap.Projects))
-		fmt.Fprintf(os.Stderr, "[cs-proxy] 配置文件: %s\n", s.watcher.Path())
+		s.log.Info("配置已加载",
+			"upstreams", len(snap.Upstreams),
+			"projects", len(snap.Projects),
+			"config_path", s.watcher.Path(),
+		)
 	}
 
 	errCh := make(chan error, 1)
@@ -53,7 +53,7 @@ func (s *Server) Start(listenAddr string) error {
 	case err := <-errCh:
 		return fmt.Errorf("服务器启动失败: %w", err)
 	case sig := <-sigCh:
-		fmt.Fprintf(os.Stderr, "[cs-proxy] 收到信号 %s，优雅退出中...\n", sig)
+		s.log.Info("收到信号，优雅退出中", "signal", sig.String())
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -62,6 +62,6 @@ func (s *Server) Start(listenAddr string) error {
 	if err := s.httpServer.Shutdown(ctx); err != nil {
 		return fmt.Errorf("关闭服务器失败: %w", err)
 	}
-	fmt.Fprintf(os.Stderr, "[cs-proxy] 已退出\n")
+	s.log.Info("cs-proxy 已退出")
 	return nil
 }

@@ -1,7 +1,7 @@
 package config
 
 import (
-	"fmt"
+	"log/slog"
 	"os"
 	"sync"
 	"time"
@@ -15,14 +15,16 @@ type Watcher struct {
 	snap     *ConfigSnapshot // 当前有效配置
 	mtime    time.Time
 	stopCh   chan struct{}
+	log      *slog.Logger
 }
 
 // NewWatcher 创建热重载监控器，启动后台轮询
-func NewWatcher(path string, interval time.Duration) *Watcher {
+func NewWatcher(path string, interval time.Duration, log *slog.Logger) *Watcher {
 	w := &Watcher{
 		path:     path,
 		interval: interval,
 		stopCh:   make(chan struct{}),
+		log:      log,
 	}
 	// 初始加载
 	snap, err := LoadFile(path)
@@ -64,7 +66,7 @@ func (w *Watcher) checkAndReload() {
 	snap, err := LoadFile(w.path)
 	if err != nil {
 		// 重载失败，保留旧配置，输出警告
-		fmt.Fprintf(os.Stderr, "[cs-proxy] 配置重载失败（保留旧配置）: %v\n", err)
+		w.log.Warn("配置重载失败，保留旧配置", "error", err)
 		return
 	}
 
