@@ -64,6 +64,19 @@ func Validate(cfg Config) error {
 		}
 	}
 
+	// 5.1 model_map 别名不得与 upstream.name 冲突（保证 allow_direct_access 路由无歧义）
+	for _, p := range cfg.Projects {
+		for reqModel := range p.ModelMap {
+			if seenUpstream[reqModel] {
+				return fmt.Errorf(
+					"projects.%s.model_map: 别名 %q 与 upstream 名冲突"+
+						"（allow_direct_access 要求别名与 cfg 名空间不重叠）",
+					p.Name, reqModel,
+				)
+			}
+		}
+	}
+
 	// 6. retry_backoff 校验
 	for _, u := range cfg.Upstreams {
 		if len(u.RetryBackoff) > 4 {

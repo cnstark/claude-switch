@@ -618,3 +618,30 @@ func TestValidate_LogMaxDays_Negative(t *testing.T) {
 		t.Fatal("expected error for negative log_max_days")
 	}
 }
+
+func TestValidate_ModelMapAliasCollidesWithUpstreamName(t *testing.T) {
+	cfg := Config{
+		Server:    Server{Listen: "127.0.0.1:8787", PrivateKeys: map[string]string{"sk-cs-key1": "p1"}},
+		Upstreams: []Upstream{{Name: "cfg1", URL: "https://a.com", APIKey: "k1", Model: "m1", Timeout: 60 * time.Second}},
+		Projects: []Project{
+			{Name: "p1", ModelMap: map[string][]string{"cfg1": {"cfg1"}}},
+		},
+	}
+	err := Validate(cfg)
+	if err == nil {
+		t.Fatal("expected error for model_map alias colliding with upstream name")
+	}
+}
+
+func TestValidate_AllowDirectAccess_TrueIsValid(t *testing.T) {
+	cfg := Config{
+		Server:    Server{Listen: "127.0.0.1:8787", PrivateKeys: map[string]string{"sk-cs-key1": "p1"}},
+		Upstreams: []Upstream{{Name: "cfg1", URL: "https://a.com", APIKey: "k1", Model: "m1", Timeout: 60 * time.Second}},
+		Projects: []Project{
+			{Name: "p1", AllowDirectAccess: true, ModelMap: map[string][]string{"aliasA": {"cfg1"}}},
+		},
+	}
+	if err := Validate(cfg); err != nil {
+		t.Fatalf("expected valid config with allow_direct_access=true, got: %v", err)
+	}
+}

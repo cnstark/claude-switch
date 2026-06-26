@@ -35,9 +35,10 @@ const (
 
 // Project 项目配置
 type Project struct {
-	Name     string              `yaml:"name"`
-	LogLevel LogLevel            `yaml:"log_level"`
-	ModelMap map[string][]string `yaml:"model_map"` // 请求模型名 → 有序 cfg 名列表
+	Name              string              `yaml:"name"`
+	LogLevel          LogLevel            `yaml:"log_level"`
+	ModelMap          map[string][]string `yaml:"model_map"`           // 请求模型名 → 有序 cfg 名列表
+	AllowDirectAccess bool                `yaml:"allow_direct_access"` // 允许用 upstream.name 直接访问（默认 false）
 }
 
 // Config 完整配置（对应 config.yaml）
