@@ -2,6 +2,7 @@ package logging
 
 import (
 	"bytes"
+	"encoding/json"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -151,4 +152,79 @@ func TestNewStdErrLogger(t *testing.T) {
 	logger := NewStdErrLogger(slog.LevelInfo)
 	logger.Info("stderr test")
 	// 不 panic 即通过
+}
+
+// TestNewLogger 验证 NewLogger 工厂装配：文件 sink 为 JSON，且级别过滤经工厂生效。
+// 不替换 os.Stderr（与并行测试包冲突），stderr 侧由 TestNewStdErrLogger 覆盖。
+func TestNewLogger_LevelEnforcementAndJSONSink(t *testing.T) {
+	dir := t.TempDir()
+	logFile := filepath.Join(dir, "test.log")
+	logger, closer, err := NewLogger(slog.LevelInfo, logFile, 7)
+	if err != nil {
+		t.Fatalf("NewLogger: %v", err)
+	}
+	defer closer.Close()
+
+	logger.Info("hello-from-test")
+	logger.Debug("should-be-suppressed")
+
+	data, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatalf("read log file: %v", err)
+	}
+	content := string(data)
+
+	// Info 行应落盘
+	if !strings.Contains(content, "hello-from-test") {
+		t.Errorf("expected log file to contain Info message, got: %q", content)
+	}
+	// Debug 行应被级别过滤（LevelInfo 下 Debug 不 Enabled，不会写入）
+	if strings.Contains(content, "should-be-suppressed") {
+		t.Errorf("expected Debug message to be suppressed, got: %q", content)
+	}
+
+	// 解析 JSON 行验证 msg 字段（slog.NewJSONHandler 默认消息键为 "msg"）
+	var foundMsg bool
+	for _, line := range strings.Split(strings.TrimSpace(content), "\n") {
+		if line == "" {
+			continue
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Errorf("unmarshal log line: %v: %q", err, line)
+			continue
+		}
+		if msg, _ := m["msg"].(string); msg == "hello-from-test" {
+			foundMsg = true
+		}
+	}
+	if !foundMsg {
+		t.Errorf("expected a JSON log entry with msg=%q, got: %q", "hello-from-test", content)
+	}
+}
+
+// TestNewLogger_EmptyLogFileFallback 验证 logFile 为空时回退到默认目录且不报错。
+// 通过 t.Setenv 将用户主目录重定向到临时目录，避免污染真实 ~/.claude_switch/logs。
+func TestNewLogger_EmptyLogFileFallback(t *testing.T) {
+	home := t.TempDir()
+	// os.UserHomeDir: Windows 读 USERPROFILE，POSIX 读 HOME，同时设置以兼容双平台
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("HOME", home)
+
+	logger, closer, err := NewLogger(slog.LevelInfo, "", 7)
+	if err != nil {
+		t.Fatalf("NewLogger with empty logFile: %v", err)
+	}
+	defer closer.Close()
+
+	logger.Info("default-dir-test")
+
+	wantPath := filepath.Join(home, ".claude_switch", "logs", "cs-proxy.log")
+	data, err := os.ReadFile(wantPath)
+	if err != nil {
+		t.Fatalf("expected log at default dir %s, read error: %v", wantPath, err)
+	}
+	if !strings.Contains(string(data), "default-dir-test") {
+		t.Errorf("expected default dir log to contain message, got: %q", string(data))
+	}
 }
