@@ -131,7 +131,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	cfgNames, ok := h.resolver.Resolve(projectName, requestModel)
 	if !ok {
 		h.log.InfoContext(r.Context(), "model not found",
-			"project", projectName,
 			"model", requestModel,
 		)
 		writeError(w, http.StatusNotFound, "not_found_error",
@@ -189,7 +188,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		fwdErr := h.forwarder.Forward(cfg, rewrittenBody, reqHeaders, w, collector, h.log)
 		if fwdErr == nil {
-			attrs := append([]any{"project", projectName, "model", requestModel, "upstream", cfgName}, tokenAttrs(collector)...)
+			attrs := append([]any{"model", requestModel, "upstream", cfgName}, tokenAttrs(collector)...)
 			h.log.InfoContext(r.Context(), "request forwarded", attrs...)
 			// 记录成功
 			if h.breaker != nil {
@@ -245,7 +244,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 			fwdErr := h.forwarder.Forward(cfg, rewrittenBody, reqHeaders, w, collector, h.log)
 			if fwdErr == nil {
-				attrs := append([]any{"project", projectName, "model", requestModel, "upstream", cfgName}, tokenAttrs(collector)...)
+				attrs := append([]any{"model", requestModel, "upstream", cfgName}, tokenAttrs(collector)...)
 				h.log.InfoContext(r.Context(), "forced probe succeeded", attrs...)
 				if msg := h.breaker.RecordSuccess(cfgName); msg != "" {
 					h.log.InfoContext(r.Context(), msg)
@@ -263,7 +262,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// 全部失败
 	h.log.InfoContext(r.Context(), "all upstreams failed",
-		"project", projectName,
 		"model", requestModel,
 	)
 	writeError(w, http.StatusBadGateway, "upstream_error", "所有上游均不可用")

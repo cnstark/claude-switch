@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"github.com/cnstark/claude-switch/internal/auth"
 	"github.com/cnstark/claude-switch/internal/circuitbreaker"
 	"github.com/cnstark/claude-switch/internal/config"
@@ -12,6 +11,7 @@ import (
 	"github.com/cnstark/claude-switch/internal/project"
 	"github.com/cnstark/claude-switch/internal/upstream"
 	"github.com/cnstark/claude-switch/internal/usage"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -582,6 +582,56 @@ func TestBreaker_4xxNotCounted(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code != 200 {
 		t.Fatalf("cfg1 should not be in backoff (4xx not counted), expected 200, got %d", rec.Code)
+	}
+}
+
+// TestHandler_Forwarded_NoDuplicateProjectField 验证成功转发日志中 project 字段只出现一次。
+// h.log 在鉴权后已通过 slog.With("project",...) 挂载 project，日志调用不应再重复传 project attr，
+// 否则 slog 不去重会输出两个 project 字段。
+func TestHandler_Forwarded_NoDuplicateProjectField(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		flusher := w.(http.Flusher)
+		w.Header().Set("content-type", "text/event-stream")
+		w.WriteHeader(200)
+		w.Write([]byte("data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n"))
+		flusher.Flush()
+		w.Write([]byte("data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":5}}\n\n"))
+		flusher.Flush()
+	}))
+	defer ts.Close()
+
+	var buf bytes.Buffer
+	h := &Handler{
+		auth:         auth.NewStore(map[string]string{"sk-cs-key1": "p1"}),
+		resolver:     project.NewResolver(map[string]map[string][]string{"p1": {"m": {"cfg1"}}}),
+		lookup:       &configLookup{upstreams: map[string]config.Upstream{"cfg1": {Name: "cfg1", URL: ts.URL, APIKey: "k", Model: "m", Timeout: 5 * time.Second}}},
+		forwarder:    NewStreamingForwarder(),
+		log:          captureLogger(&buf),
+		usageEnabled: false,
+	}
+	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"m"}`))
+	req.Header.Set("x-api-key", "sk-cs-key1")
+	req.Header.Set("content-type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// 找到 "request forwarded" 那一行，断言其中 project= 只出现一次
+	var forwardedLine string
+	for _, line := range strings.Split(buf.String(), "\n") {
+		if strings.Contains(line, "request forwarded") {
+			forwardedLine = line
+			break
+		}
+	}
+	if forwardedLine == "" {
+		t.Fatalf("未找到 request forwarded 日志行:\n%s", buf.String())
+	}
+	if got := strings.Count(forwardedLine, "project="); got != 1 {
+		t.Fatalf("expected exactly 1 project= in forwarded log line, got %d:\n%s", got, forwardedLine)
 	}
 }
 
